@@ -1,7 +1,7 @@
 ---
 title: "RunHand 1.0 仕様書"
 subtitle: "Agent-driven computational research workflow accelerator"
-version: "1.0-draft.4"
+version: "1.0-draft.5"
 date: "2026-09-04"
 status: "Lean target-state specification draft"
 ---
@@ -13,7 +13,7 @@ status: "Lean target-state specification draft"
 | 項目 | 内容 |
 |---|---|
 | 文書状態 | Lean target-state specification draft |
-| 版 | 1.0-draft.4 |
+| 版 | 1.0-draft.5 |
 | 主対象 | HPC 上の simulation、test、analysis、submit、status 確認 |
 | 連携対象 | Simulator plugin、Site plugin（主な例: KUDPC plugin） |
 
@@ -616,7 +616,8 @@ ok=true は exit code 0 の場合だけとする。human-readable output と JSO
 GC 以外の全 mutating command は --dry-run を受け付け、RunHand-managed filesystem、cache、
 history、optional submission record、external service を変更しない。GC は --apply がない状態を preview とする。
 
-context、copy plan、validation evidence、provider request / response の schema は schemas/v1 に置き、
+context、copy plan、validation evidence、provider request / response、optional submission
+record の schema は schemas/v1 に置き、
 同一 major version 内で後方互換にする。該当 schema を同梱する前に関連 command または
 provider contract の 1.0 conformance を主張しない。
 

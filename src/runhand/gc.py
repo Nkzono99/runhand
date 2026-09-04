@@ -10,6 +10,7 @@ from typing import Any
 
 from .config import Config
 from .errors import LocalIOError, PlanError, UnsafeError
+from .history import is_history_record
 from .result import Result
 from .scratch import TASK_META, _load_task
 from .stage import STAGE_META
@@ -38,7 +39,10 @@ def parse_duration(value: str | None, default_days: int) -> timedelta:
 def _parse_time(value: Any, fallback: float) -> datetime:
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
         except ValueError:
             pass
     return datetime.fromtimestamp(fallback, timezone.utc)
@@ -66,14 +70,42 @@ def _stage_candidates(
     deletable: list[dict[str, Any]] = []
     protected: list[dict[str, Any]] = []
     root = config.scratch_root / "stages"
+    if root.is_symlink() or (
+        root.exists() and not is_within(root, config.scratch_root)
+    ):
+        protected.append(
+            {
+                "path": str(root),
+                "kind": "scratch",
+                "reason": "unsafe_container",
+            }
+        )
+        return deletable, protected
     if not root.is_dir():
         return deletable, protected
     for stage in sorted(root.iterdir(), key=lambda path: os.fsencode(path.name)):
         meta_path = stage / STAGE_META
+        if not is_within(stage, config.scratch_root):
+            protected.append(
+                {
+                    "path": str(stage),
+                    "kind": "scratch",
+                    "reason": "root_escape",
+                }
+            )
+            continue
         if not stage.is_dir() or not meta_path.is_file():
             continue
         try:
+            if stage.is_symlink():
+                raise ValueError("stage entry is a symlink")
             meta = read_json(meta_path)
+            if (
+                meta.get("schema") != 1
+                or meta.get("owner") != "runhand"
+                or meta.get("kind") != "stage"
+            ):
+                raise ValueError("stage metadata is not owned or compatible")
             last_used = _parse_time(meta.get("last_used_at"), stage.stat().st_mtime)
         except Exception as exc:
             protected.append(
@@ -114,14 +146,74 @@ def _task_candidates(
     deletable: list[dict[str, Any]] = []
     protected: list[dict[str, Any]] = []
     root = config.scratch_root / "tasks"
+    if root.is_symlink() or (
+        root.exists() and not is_within(root, config.scratch_root)
+    ):
+        protected.append(
+            {
+                "path": str(root),
+                "kind": "scratch",
+                "reason": "unsafe_container",
+            }
+        )
+        return deletable, protected
     if not root.is_dir():
         return deletable, protected
-    for meta_path in sorted(
-        root.glob(f"*/*/{TASK_META}"), key=lambda path: os.fsencode(str(path))
-    ):
-        task = meta_path.parent
+    try:
+        kind_roots = sorted(root.iterdir(), key=lambda path: os.fsencode(path.name))
+    except OSError as exc:
+        protected.append(
+            {
+                "path": str(root),
+                "kind": "scratch",
+                "reason": "scan_error",
+                "detail": str(exc),
+            }
+        )
+        return deletable, protected
+    tasks: list[Path] = []
+    for kind_root in kind_roots:
+        if (
+            kind_root.is_symlink()
+            or not is_within(kind_root, config.scratch_root)
+            or not kind_root.is_dir()
+        ):
+            protected.append(
+                {
+                    "path": str(kind_root),
+                    "kind": "scratch",
+                    "reason": "unsafe_container",
+                }
+            )
+            continue
         try:
+            tasks.extend(
+                sorted(kind_root.iterdir(), key=lambda path: os.fsencode(path.name))
+            )
+        except OSError as exc:
+            protected.append(
+                {
+                    "path": str(kind_root),
+                    "kind": "scratch",
+                    "reason": "scan_error",
+                    "detail": str(exc),
+                }
+            )
+    for task in sorted(tasks, key=lambda path: os.fsencode(str(path))):
+        meta_path = task / TASK_META
+        if not meta_path.is_file():
+            continue
+        try:
+            if task.is_symlink():
+                raise ValueError("task entry is a symlink")
             meta = read_json(meta_path)
+            expected_kind = task.parent.name
+            if (
+                meta.get("schema") != 1
+                or meta.get("owner") != "runhand"
+                or meta.get("kind") != expected_kind
+            ):
+                raise ValueError("task metadata is not owned or compatible")
             last_used = _parse_time(meta.get("last_used_at"), task.stat().st_mtime)
         except Exception as exc:
             protected.append(
@@ -168,10 +260,30 @@ def _state_candidates(
     requested = {kind} if kind in {"cache", "history"} else {"cache", "history"}
     for item_kind in sorted(requested):
         root = config.state_root / item_kind
+        if root.is_symlink() or (
+            root.exists() and not is_within(root, config.state_root)
+        ):
+            protected.append(
+                {
+                    "path": str(root),
+                    "kind": item_kind,
+                    "reason": "unsafe_container",
+                }
+            )
+            continue
         if not root.is_dir():
             continue
         for path in sorted(root.iterdir(), key=lambda value: os.fsencode(value.name)):
             if path.name == OWNER_FILE:
+                continue
+            if not is_within(path, config.state_root):
+                protected.append(
+                    {
+                        "path": str(path),
+                        "kind": item_kind,
+                        "reason": "root_escape",
+                    }
+                )
                 continue
             try:
                 modified = datetime.fromtimestamp(path.lstat().st_mtime, timezone.utc)
@@ -190,16 +302,36 @@ def _state_candidates(
                 "kind": item_kind,
                 "bytes": _tree_size(path) if path.is_dir() else path.lstat().st_size,
             }
+            try:
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError("state entry is not a regular file")
+                record = read_json(path)
+            except Exception as exc:
+                entry["reason"] = f"{item_kind}_unknown"
+                entry["detail"] = str(exc)
+                protected.append(entry)
+                continue
+            compatible = (
+                record.get("schema") == 1
+                and record.get("owner") == "runhand"
+                and record.get("kind") == "cache"
+                if item_kind == "cache"
+                else is_history_record(record)
+            )
+            if not compatible:
+                entry["reason"] = f"{item_kind}_incompatible"
+                protected.append(entry)
+                continue
             if item_kind == "history":
-                try:
-                    record = read_json(path)
-                except Exception as exc:
-                    entry["reason"] = "history_unknown"
-                    entry["detail"] = str(exc)
-                    protected.append(entry)
-                    continue
                 if record.get("reconciled") is not True:
                     entry["reason"] = "history_unreconciled"
+                    protected.append(entry)
+                    continue
+                if (
+                    record.get("result") == "accepted"
+                    and record.get("attempt_state") != "terminal"
+                ):
+                    entry["reason"] = "history_nonterminal"
                     protected.append(entry)
                     continue
             if modified <= cutoff:
@@ -283,7 +415,7 @@ def collect(
 
 
 def _remove_owned_candidate(config: Config, path: Path, kind: str) -> None:
-    roots = [config.scratch_root] if kind == "scratch" else [config.state_root / kind]
+    roots = [config.scratch_root] if kind == "scratch" else [config.state_root]
     if not any(is_within(path, root) and path != root for root in roots):
         raise UnsafeError(
             "gc_target_outside_owned_root",

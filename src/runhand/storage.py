@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,7 @@ def read_json(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as stream:
             value = json.load(stream)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise LocalIOError(
             "state_read_failed", f"cannot read local state: {exc}", path=path
         ) from exc
@@ -65,6 +66,12 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 
 def ensure_owned_root(root: Path, kind: str) -> None:
     marker = root / OWNER_FILE
+    if root.is_symlink():
+        raise UnsafeError(
+            "managed_root_symlink",
+            "managed root must not be a symlink",
+            path=root,
+        )
     try:
         root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -104,7 +111,45 @@ def ensure_owned_root(root: Path, kind: str) -> None:
     )
 
 
+def ensure_owned_subdir(root: Path, kind: str, *parts: str) -> Path:
+    """Create an internal managed directory without following symlink containers."""
+    ensure_owned_root(root, kind)
+    current = root
+    for part in parts:
+        if not part or part in {".", ".."} or "/" in part or "\\" in part:
+            raise UnsafeError(
+                "invalid_managed_subdir",
+                "managed subdirectory component is unsafe",
+                path=current / part,
+            )
+        current = current / part
+        try:
+            current.mkdir(exist_ok=True)
+            info = current.lstat()
+        except OSError as exc:
+            raise LocalIOError(
+                "managed_subdir_create_failed",
+                f"cannot create managed subdirectory: {exc}",
+                path=current,
+            ) from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise UnsafeError(
+                "unsafe_managed_subdir",
+                "managed subdirectory is not a real directory",
+                path=current,
+            )
+        if not is_within(current, root):
+            raise UnsafeError(
+                "managed_subdir_escape",
+                "managed subdirectory escapes its owned root",
+                path=current,
+            )
+    return current
+
+
 def root_is_owned(root: Path, kind: str) -> bool:
+    if root.is_symlink():
+        return False
     marker = root / OWNER_FILE
     if marker.is_symlink() or not marker.is_file():
         return False

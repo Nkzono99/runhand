@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v1/submission-record.schema.json",
+  "title": "RunHand optional submission history record v1",
+  "type": "object",
+  "required": ["schema", "owner", "kind", "result", "reconciled"],
+  "properties": {
+    "schema": {"const": 1},
+    "owner": {"const": "runhand"},
+    "kind": {"const": "submission"},
+    "result": {"enum": ["accepted", "rejected", "unknown", "unknown_unresolved"]},
+    "reconciled": {"type": "boolean"},
+    "attempt_state": {"enum": ["none", "active", "terminal", "unresolved", "unknown"]},
+    "target": {"type": "string"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "submit_time": {"type": "string", "format": "date-time"},
+    "job_evidence": {"type": ["object", "null"]},
+    "messages": {"type": "array", "items": {"type": "object"}}
+  }
+}

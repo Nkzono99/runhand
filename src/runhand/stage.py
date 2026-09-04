@@ -14,7 +14,7 @@ from .config import Config
 from .copying import CopyPlan, Entry, copy_entries, select_entries
 from .errors import LocalIOError, PlanError, UnsafeError
 from .result import Result, warning
-from .storage import atomic_write_json, ensure_owned_root, read_json, utc_now
+from .storage import atomic_write_json, ensure_owned_subdir, read_json, utc_now
 
 STAGE_META = "stage.json"
 STAGE_TREE = "tree"
@@ -60,9 +60,7 @@ def create_stage(config: Config, plan: CopyPlan, *, dry_run: bool) -> Result:
             },
         )
 
-    ensure_owned_root(config.scratch_root, "scratch")
-    stages_root = config.scratch_root / "stages"
-    stages_root.mkdir(parents=True, exist_ok=True)
+    stages_root = ensure_owned_subdir(config.scratch_root, "scratch", "stages")
     stage = stages_root / _stage_id()
     temporary = stages_root / f".{stage.name}.tmp-{uuid.uuid4().hex}"
     created = utc_now()

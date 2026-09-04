@@ -8,8 +8,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import Config
+from .history import history_summary, history_warnings
 from .result import Result, warning
-from .storage import atomic_write_json, ensure_owned_root, read_json, root_is_owned
+from .storage import (
+    atomic_write_json,
+    ensure_owned_subdir,
+    is_within,
+    read_json,
+    root_is_owned,
+)
 
 _README_NAMES = {"README", "README.md", "README.rst", "README.txt"}
 _CONTROL_SUFFIXES = {".toml", ".yaml", ".yml", ".json", ".inp", ".in", ".cfg", ".ini"}
@@ -44,12 +51,23 @@ def _load_cache(config: Config) -> dict[str, Any] | None:
     path = _cache_path(config)
     if not root_is_owned(config.state_root, "state"):
         return None
-    if not path.is_file():
+    if (
+        path.parent.is_symlink()
+        or not is_within(path.parent, config.state_root)
+        or path.is_symlink()
+        or not path.is_file()
+    ):
         return None
     try:
         cached = read_json(path)
-        if cached.get("root_signature") != _root_signature(
-            config.workspace, config.context_max_depth, config.context_max_entries
+        if (
+            cached.get("schema") != 1
+            or cached.get("owner") != "runhand"
+            or cached.get("kind") != "cache"
+            or cached.get("root_signature")
+            != _root_signature(
+                config.workspace, config.context_max_depth, config.context_max_entries
+            )
         ):
             return None
         data = cached.get("data")
@@ -61,11 +79,13 @@ def _load_cache(config: Config) -> dict[str, Any] | None:
 def _write_cache(config: Config, data: dict[str, Any]) -> dict[str, Any] | None:
     path = _cache_path(config)
     try:
-        ensure_owned_root(config.state_root, "state")
+        ensure_owned_subdir(config.state_root, "state", "cache")
         atomic_write_json(
             path,
             {
                 "schema": 1,
+                "owner": "runhand",
+                "kind": "cache",
                 "root_signature": _root_signature(
                     config.workspace,
                     config.context_max_depth,
@@ -90,7 +110,10 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
         cached = _load_cache(config)
         if cached is not None:
             cached = dict(cached)
+            cached["scratch"] = _scratch_status(config)
+            cached["history"] = history_summary(config.state_root)
             cached["cache"] = {"status": "hit", "path": str(_cache_path(config))}
+            warnings.extend(history_warnings(cached["history"]))
             return Result("context", cached, warnings)
 
     candidates: dict[str, dict[str, Any]] = {}
@@ -208,10 +231,8 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
         "control_files": sorted(control_files, key=os.fsencode),
         "prune_hints": sorted(prune_hints, key=os.fsencode),
         "naming_patterns": _naming_patterns(candidates),
-        "scratch": {
-            "root": str(config.scratch_root),
-            "exists": config.scratch_root.exists(),
-        },
+        "scratch": _scratch_status(config),
+        "history": history_summary(config.state_root),
         "cache": {"status": "miss" if config.warm_cache else "disabled"},
         "scan": {
             "entries_visited": visited,
@@ -223,7 +244,18 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
         cache_warning = _write_cache(config, data)
         if cache_warning is not None:
             warnings.append(cache_warning)
+    warnings.extend(history_warnings(data["history"]))
     return Result("context", data, warnings)
+
+
+def _scratch_status(config: Config) -> dict[str, Any]:
+    return {
+        "root": str(config.scratch_root),
+        "exists": config.scratch_root.exists(),
+        "owned": root_is_owned(config.scratch_root, "scratch")
+        if config.scratch_root.exists()
+        else None,
+    }
 
 
 def _naming_patterns(candidates: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:

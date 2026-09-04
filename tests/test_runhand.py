@@ -16,11 +16,12 @@ from runhand.cli import main
 from runhand.config import Config, load_config
 from runhand.context import scan_context
 from runhand.copying import CopyPlan, select_entries
+from runhand.doctor import run_doctor
 from runhand.errors import PlanError, UnsafeError
 from runhand.gc import collect, collect_orphan
 from runhand.scratch import TASK_META, get_scratch
 from runhand.stage import STAGE_META, create_stage, inspect_stage, promote_stage
-from runhand.storage import atomic_write_json, read_json
+from runhand.storage import atomic_write_json, ensure_owned_root, read_json
 
 
 class WorkspaceCase(unittest.TestCase):
@@ -90,6 +91,45 @@ class ContextTests(WorkspaceCase):
         data = scan_context(limited, refresh=True).data
         self.assertTrue(data["partial"])
         self.assertEqual(data["partial_reasons"][0]["code"], "max_entries")
+
+    def test_cache_hit_refreshes_recent_and_unresolved_history(self) -> None:
+        config = Config(
+            workspace=self.workspace,
+            scratch_root=self.scratch,
+            state_root=self.state,
+            warm_cache=True,
+        )
+        first = scan_context(config, refresh=False)
+        self.assertEqual(first.data["cache"]["status"], "miss")
+
+        history = self.state / "history"
+        record = history / "submit-1.json"
+        atomic_write_json(
+            record,
+            {
+                "schema": 1,
+                "owner": "runhand",
+                "kind": "submission",
+                "result": "unknown_unresolved",
+                "target": str(self.workspace / "run01"),
+                "recorded_at": "2026-09-04T00:00:00Z",
+                "reconciled": False,
+            },
+        )
+
+        second = scan_context(config, refresh=False)
+        self.assertEqual(second.data["cache"]["status"], "hit")
+        self.assertEqual(
+            second.data["history"]["recent"][0]["result"], "unknown_unresolved"
+        )
+        self.assertEqual(second.data["history"]["unresolved"], [str(record)])
+        self.assertIn(
+            "unresolved_submission_evidence",
+            {item["code"] for item in second.warnings},
+        )
+
+        doctor = run_doctor(config)
+        self.assertEqual(doctor.data["unresolved_history"], [str(record)])
 
 
 class StageTests(WorkspaceCase):
@@ -295,6 +335,154 @@ class ScratchAndGCTests(WorkspaceCase):
         collect(self.config, kind="scratch", older_than="1d", apply=True)
         self.assertFalse(stage.exists())
 
+    def test_gc_protects_foreign_child_metadata(self) -> None:
+        ensure_owned_root(self.scratch, "scratch")
+        ensure_owned_root(self.state, "state")
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+        foreign_stage = self.scratch / "stages" / "stage-foreign"
+        foreign_stage.mkdir(parents=True)
+        atomic_write_json(
+            foreign_stage / STAGE_META,
+            {"schema": 1, "state": "promoted", "last_used_at": old},
+        )
+        foreign_task = self.scratch / "tasks" / "analysis" / "task-foreign"
+        foreign_task.mkdir(parents=True)
+        atomic_write_json(
+            foreign_task / TASK_META,
+            {
+                "schema": 1,
+                "kind": "analysis",
+                "liveness": "terminal",
+                "attempt_state": "none",
+                "last_used_at": old,
+            },
+        )
+        foreign_cache = self.state / "cache" / "foreign.json"
+        atomic_write_json(foreign_cache, {"schema": 1, "kind": "cache"})
+        foreign_history = self.state / "history" / "foreign.json"
+        atomic_write_json(
+            foreign_history,
+            {"schema": 1, "result": "rejected", "reconciled": True},
+        )
+        owned_history = self.state / "history" / "owned.json"
+        atomic_write_json(
+            owned_history,
+            {
+                "schema": 1,
+                "owner": "runhand",
+                "kind": "submission",
+                "result": "rejected",
+                "reconciled": True,
+            },
+        )
+        active_history = self.state / "history" / "active.json"
+        atomic_write_json(
+            active_history,
+            {
+                "schema": 1,
+                "owner": "runhand",
+                "kind": "submission",
+                "result": "accepted",
+                "reconciled": True,
+                "attempt_state": "active",
+            },
+        )
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        for path in (
+            foreign_cache,
+            foreign_history,
+            owned_history,
+            active_history,
+        ):
+            os.utime(path, (old_timestamp, old_timestamp))
+
+        result = collect(self.config, kind="all", older_than="1d", apply=True)
+        for path in (
+            foreign_stage,
+            foreign_task,
+            foreign_cache,
+            foreign_history,
+            active_history,
+        ):
+            self.assertTrue(path.exists())
+        self.assertFalse(owned_history.exists())
+        protected = {item["path"]: item["reason"] for item in result.data["protected"]}
+        self.assertEqual(protected[str(foreign_stage)], "metadata_unknown")
+        self.assertEqual(protected[str(foreign_task)], "metadata_unknown")
+        self.assertEqual(protected[str(foreign_cache)], "cache_incompatible")
+        self.assertEqual(protected[str(foreign_history)], "history_incompatible")
+        self.assertEqual(protected[str(active_history)], "history_nonterminal")
+
+    def test_managed_container_symlinks_never_escape_owned_roots(self) -> None:
+        source = self.source()
+        outside_root = self.root / "outside-root"
+        outside_root.mkdir()
+        symlink_root = self.root / "scratch-root-link"
+        os.symlink(outside_root, symlink_root)
+        with self.assertRaises(UnsafeError):
+            ensure_owned_root(symlink_root, "scratch")
+
+        ensure_owned_root(self.scratch, "scratch")
+        ensure_owned_root(self.state, "state")
+        outside = self.root / "outside"
+        outside_stages = outside / "stages"
+        outside_tasks = outside / "tasks"
+        outside_cache = outside / "cache"
+        outside_history = outside / "history"
+        for path in (
+            outside_stages,
+            outside_tasks,
+            outside_cache,
+            outside_history,
+        ):
+            path.mkdir(parents=True)
+        os.symlink(outside_stages, self.scratch / "stages")
+        os.symlink(outside_tasks, self.scratch / "tasks")
+        os.symlink(outside_cache, self.state / "cache")
+        os.symlink(outside_history, self.state / "history")
+
+        with self.assertRaises(UnsafeError):
+            create_stage(self.config, self.plan(source), dry_run=False)
+        with self.assertRaises(UnsafeError):
+            get_scratch(
+                self.config,
+                kind="analysis",
+                key="escape",
+                pin=False,
+                dry_run=False,
+            )
+
+        context = scan_context(
+            Config(
+                workspace=self.workspace,
+                scratch_root=self.scratch,
+                state_root=self.state,
+                warm_cache=True,
+            ),
+            refresh=True,
+        )
+        self.assertIn(
+            "context_cache_write_failed", {item["code"] for item in context.warnings}
+        )
+        self.assertIn(
+            "history_unavailable", {item["code"] for item in context.warnings}
+        )
+
+        result = collect(self.config, kind="all", older_than="0s", apply=True)
+        protected = {item["path"]: item["reason"] for item in result.data["protected"]}
+        self.assertEqual(protected[str(self.scratch / "stages")], "unsafe_container")
+        self.assertEqual(protected[str(self.scratch / "tasks")], "unsafe_container")
+        self.assertEqual(protected[str(self.state / "cache")], "unsafe_container")
+        self.assertEqual(protected[str(self.state / "history")], "unsafe_container")
+        for path in (
+            outside_stages,
+            outside_tasks,
+            outside_cache,
+            outside_history,
+        ):
+            self.assertEqual(list(path.iterdir()), [])
+
 
 class ContractTests(WorkspaceCase):
     def test_cli_accepts_copy_plan_on_stdin_and_promotes(self) -> None:
@@ -306,7 +494,7 @@ class ContractTests(WorkspaceCase):
             "exclude": [],
             "symlink_policy": "internal-relative",
             "completeness": "complete",
-            "basis": {"kind": "user"},
+            "basis": {"kind": "user", "api_token": "do-not-emit"},
         }
         stdout = io.StringIO()
         with (
@@ -331,6 +519,8 @@ class ContractTests(WorkspaceCase):
                 ]
             )
         self.assertEqual(code, 0)
+        self.assertNotIn("do-not-emit", stdout.getvalue())
+        self.assertIn("<redacted>", stdout.getvalue())
         stage = json.loads(stdout.getvalue())["data"]["stage"]
 
         target = self.workspace / "cli-promoted"
@@ -403,6 +593,24 @@ class ContractTests(WorkspaceCase):
                 environ={"XDG_CONFIG_HOME": str(self.root / "empty-config")},
             )
         self.assertEqual(raised.exception.code, "conflicting_managed_roots")
+
+        invalid_configs = (
+            "version = true\n",
+            "version = 1\n[behavior]\nverification = []\n",
+            "version = 1\n[scratch]\nroot = 42\n",
+        )
+        for content in invalid_configs:
+            with self.subTest(content=content):
+                (self.workspace / "runhand.toml").write_text(content, encoding="utf-8")
+                with self.assertRaises(Exception) as invalid:
+                    load_config(
+                        workspace_arg=str(self.workspace),
+                        context_path=None,
+                        scratch_root_arg=None,
+                        state_root_arg=None,
+                        environ={"XDG_CONFIG_HOME": str(self.root / "empty-config")},
+                    )
+                self.assertEqual(invalid.exception.exit_code, 2)
 
     def test_bulk_gc_skips_unowned_roots(self) -> None:
         unowned = self.root / "unowned"

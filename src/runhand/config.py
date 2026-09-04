@@ -116,7 +116,8 @@ def _load_toml(path: Path) -> dict[str, Any]:
         raise UsageError(
             "invalid_config", f"cannot read config: {exc}", path=path
         ) from exc
-    if raw.get("version", 1) != 1:
+    version = raw.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
         raise UsageError(
             "unsupported_config_version", "config version must be 1", path=path
         )
@@ -188,8 +189,18 @@ def _parse_bool(value: Any, key: str) -> bool:
 
 def _validate(values: dict[str, Any]) -> dict[str, Any]:
     for key in ("verification", "observation"):
-        if values[key] not in {"adaptive", "none", "light", "full"}:
+        if not isinstance(values[key], str) or values[key] not in {
+            "adaptive",
+            "none",
+            "light",
+            "full",
+        }:
             raise UsageError("invalid_config_value", f"{key} has an unsupported value")
+    for key in ("scratch_root", "state_root"):
+        if key in values and (
+            not isinstance(values[key], str) or not values[key].strip()
+        ):
+            raise UsageError("invalid_config_type", f"{key} must be a non-empty path")
     positive = (
         "completion_budget_seconds",
         "scratch_ttl_days",

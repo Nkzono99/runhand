@@ -10,6 +10,7 @@ from typing import Any
 
 from . import __version__
 from .config import Config
+from .history import history_summary, history_warnings
 from .result import Result, warning
 from .storage import OWNER_FILE, read_json
 
@@ -61,15 +62,8 @@ def run_doctor(config: Config) -> Result:
     repository_root = Path(__file__).resolve().parents[2]
     manifest = repository_root / ".codex-plugin" / "plugin.json"
     skill = repository_root / "skills" / "runhand" / "SKILL.md"
-    unresolved = _unresolved_history(config.state_root / "history")
-    if unresolved:
-        warnings.append(
-            warning(
-                "unresolved_submission_evidence",
-                "local history contains unresolved submission evidence; reconcile through the Site capability",
-                details={"count": len(unresolved)},
-            )
-        )
+    history = history_summary(config.state_root)
+    warnings.extend(history_warnings(history))
     return Result(
         "doctor",
         {
@@ -85,21 +79,8 @@ def run_doctor(config: Config) -> Result:
                 "manifest": str(manifest) if manifest.is_file() else None,
                 "skill": str(skill) if skill.is_file() else None,
             },
-            "unresolved_history": unresolved,
+            "history": history,
+            "unresolved_history": history["unresolved"],
         },
         warnings,
     )
-
-
-def _unresolved_history(root: Path) -> list[str]:
-    if not root.is_dir():
-        return []
-    result: list[str] = []
-    for path in sorted(root.glob("*.json"), key=lambda item: os.fsencode(item.name)):
-        try:
-            value = read_json(path)
-        except Exception:
-            continue
-        if value.get("result") in {"unknown", "unknown_unresolved"}:
-            result.append(str(path))
-    return result

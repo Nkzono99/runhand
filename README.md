@@ -8,6 +8,7 @@ The current implementation is the first 1.0 vertical slice:
 - versioned copy plans and source-safe scratch stages;
 - Linux `renameat2(RENAME_NOREPLACE)` promotion into formal run directories;
 - unique scratch allocation with key matches treated only as reuse hints;
+- live recent/unresolved submission-history summaries without making history a gate;
 - preview-first garbage collection that protects unknown liveness;
 - a Codex plugin skill for coordinating the CLI with trusted Simulator and Site capabilities.
 

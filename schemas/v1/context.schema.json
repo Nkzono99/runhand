@@ -3,7 +3,7 @@
   "$id": "https://github.com/Nkzono99/runhand/schemas/v1/context.schema.json",
   "title": "RunHand context data v1",
   "type": "object",
-  "required": ["workspace", "partial", "partial_reasons", "candidate_runs", "readmes", "control_files", "prune_hints", "scratch", "cache", "scan"],
+  "required": ["workspace", "partial", "partial_reasons", "candidate_runs", "readmes", "control_files", "prune_hints", "scratch", "history", "cache", "scan"],
   "properties": {
     "workspace": {"type": "string"},
     "partial": {"type": "boolean"},
@@ -26,6 +26,19 @@
     "prune_hints": {"type": "array", "items": {"type": "string"}},
     "naming_patterns": {"type": "array", "items": {"type": "object"}},
     "scratch": {"type": "object"},
+    "history": {
+      "type": "object",
+      "required": ["root", "status", "scanned", "recent", "unresolved", "invalid", "invalid_count"],
+      "properties": {
+        "root": {"type": "string"},
+        "status": {"enum": ["absent", "available", "unowned", "unreadable"]},
+        "scanned": {"type": "integer", "minimum": 0},
+        "recent": {"type": "array", "items": {"type": "object"}},
+        "unresolved": {"type": "array", "items": {"type": "string"}},
+        "invalid": {"type": "array", "items": {"type": "string"}},
+        "invalid_count": {"type": "integer", "minimum": 0}
+      }
+    },
     "cache": {"type": "object"},
     "scan": {"type": "object"}
   }

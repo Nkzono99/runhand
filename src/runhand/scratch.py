@@ -14,7 +14,7 @@ from .errors import PlanError, UnsafeError
 from .result import Result, warning
 from .storage import (
     atomic_write_json,
-    ensure_owned_root,
+    ensure_owned_subdir,
     is_within,
     read_json,
     require_owned_root,
@@ -34,12 +34,18 @@ def _task_candidates(root: Path, kind: str, key_digest: str) -> list[dict[str, A
     if not root_is_owned(root, "scratch"):
         return []
     parent = root / "tasks" / kind
-    if not parent.is_dir():
+    if parent.is_symlink() or not is_within(parent, root) or not parent.is_dir():
         return []
     candidates: list[dict[str, Any]] = []
     for child in sorted(parent.iterdir(), key=lambda path: os.fsencode(path.name)):
         meta_path = child / TASK_META
-        if not child.is_dir() or not meta_path.is_file():
+        if (
+            child.is_symlink()
+            or not is_within(child, root)
+            or not child.is_dir()
+            or meta_path.is_symlink()
+            or not meta_path.is_file()
+        ):
             continue
         try:
             meta = read_json(meta_path)
@@ -92,9 +98,7 @@ def get_scratch(
             warnings,
         )
 
-    ensure_owned_root(config.scratch_root, "scratch")
-    parent = config.scratch_root / "tasks" / kind
-    parent.mkdir(parents=True, exist_ok=True)
+    parent = ensure_owned_subdir(config.scratch_root, "scratch", "tasks", kind)
     task = parent / f"task-{uuid.uuid4().hex}"
     try:
         task.mkdir(exist_ok=False)

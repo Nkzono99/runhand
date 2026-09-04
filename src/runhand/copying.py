@@ -68,7 +68,7 @@ def load_copy_plan(path: str, source_argument: str) -> CopyPlan:
         else:
             with Path(path).open("r", encoding="utf-8") as stream:
                 raw = json.load(stream)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PlanError(
             "copy_plan_read_failed", f"cannot read copy plan: {exc}"
         ) from exc
