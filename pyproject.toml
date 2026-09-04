@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runhand"
-version = "0.2.0"
+version = "0.2.1"
 description = "Deterministic filesystem worker for agent-driven computational research workflows"
 readme = "README.md"
 requires-python = ">=3.11"
