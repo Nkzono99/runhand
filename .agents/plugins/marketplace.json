@@ -1,0 +1,21 @@
+{
+  "name": "runhand",
+  "interface": {
+    "displayName": "RunHand"
+  },
+  "plugins": [
+    {
+      "name": "runhand",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/Nkzono99/runhand.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

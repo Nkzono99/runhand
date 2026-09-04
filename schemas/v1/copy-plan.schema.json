@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v1/copy-plan.schema.json",
+  "title": "RunHand copy plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source", "include", "symlink_policy", "completeness"],
+  "properties": {
+    "schema": {"const": 1},
+    "source": {"type": "string", "minLength": 1},
+    "include": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/pattern"}
+    },
+    "exclude": {
+      "type": "array",
+      "default": [],
+      "items": {"$ref": "#/$defs/pattern"}
+    },
+    "symlink_policy": {"enum": ["internal-relative", "reject"]},
+    "completeness": {"enum": ["complete", "partial"]},
+    "basis": {"type": "object"}
+  },
+  "$defs": {
+    "pattern": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Relative POSIX glob split by '/'. *, ?, and [] match one segment; ** matches zero or more complete segments. Absolute paths, backslashes, and '..' segments are forbidden."
+    }
+  }
+}

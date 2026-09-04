@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v1/provider-request.schema.json",
+  "title": "RunHand Site provider request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "action", "target", "command"],
+  "properties": {
+    "schema": {"const": 1},
+    "action": {"enum": ["execute", "submit", "status", "retry", "restart", "cancel"]},
+    "target": {"type": "string"},
+    "command": {"type": ["array", "null"], "items": {"type": "string"}},
+    "resources": {"type": ["object", "null"]},
+    "stable_action_key": {"type": ["string", "null"]},
+    "reconciliation_key": {"type": ["string", "null"]},
+    "validation": {"$ref": "validation-evidence.schema.json"}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v1/provider-response.schema.json",
+  "title": "RunHand Site provider response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "result", "duplicate_protection", "submit_calls"],
+  "properties": {
+    "schema": {"const": 1},
+    "result": {"enum": ["accepted", "rejected", "unknown"]},
+    "job_evidence": {"type": ["object", "null"]},
+    "reconciliation_key": {"type": ["string", "null"]},
+    "recovery": {"enum": ["available", "unavailable", "not_needed"]},
+    "duplicate_protection": {"enum": ["provider_idempotent", "best_effort"]},
+    "submit_calls": {"type": "integer", "minimum": 0, "maximum": 1},
+    "messages": {"type": "array", "items": {"type": "object"}}
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v1/context.schema.json",
+  "title": "RunHand context data v1",
+  "type": "object",
+  "required": ["workspace", "partial", "partial_reasons", "candidate_runs", "readmes", "control_files", "prune_hints", "scratch", "cache", "scan"],
+  "properties": {
+    "workspace": {"type": "string"},
+    "partial": {"type": "boolean"},
+    "partial_reasons": {"type": "array", "items": {"type": "object"}},
+    "candidate_runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason", "evidence", "classification"],
+        "properties": {
+          "path": {"type": "string"},
+          "reason": {"type": "array", "items": {"type": "string"}},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "classification": {"const": "structural_candidate"}
+        }
+      }
+    },
+    "readmes": {"type": "array", "items": {"type": "string"}},
+    "control_files": {"type": "array", "items": {"type": "string"}},
+    "prune_hints": {"type": "array", "items": {"type": "string"}},
+    "naming_patterns": {"type": "array", "items": {"type": "object"}},
+    "scratch": {"type": "object"},
+    "cache": {"type": "object"},
+    "scan": {"type": "object"}
+  }
+}

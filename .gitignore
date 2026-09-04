@@ -209,6 +209,9 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# RunHand local disposable state
+.runhand/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
