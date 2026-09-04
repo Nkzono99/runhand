@@ -1,7 +1,7 @@
 {
   "name": "runhand",
-  "version": "0.2.1",
-  "description": "Agent-driven computational research workflow acceleration using trusted Simulator and Site capabilities plus a deterministic filesystem CLI.",
+  "version": "0.3.0",
+  "description": "Safe simulation Run staging, no-replace promotion, disposable scratch, and RunHand-owned state maintenance.",
   "author": {
     "name": "Jin Nakazono",
     "url": "https://github.com/Nkzono99/runhand"
@@ -19,8 +19,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "RunHand",
-    "shortDescription": "Accelerate recurring simulation, analysis, and HPC workflows.",
-    "longDescription": "Completes concise computational-research requests from local precedent while preserving action authority. It delegates simulation identity, mutation, and validation to trusted Simulator capabilities; delegates host, resources, scheduler, and scratch policy to trusted Site capabilities; and uses the RunHand CLI for bounded context scans, safe staging, atomic no-replace promotion, scratch allocation, and conservative garbage collection.",
+    "shortDescription": "Stage and publish simulation Runs safely.",
+    "longDescription": "Moves simulation work safely from an existing Run into a disposable stage and then into a new no-replace formal Run, or allocates scratch for bounded temporary work. Scientific semantics remain with Simulator capabilities, scheduler semantics remain with Site capabilities, and maintenance cleanup is isolated in a focused companion skill.",
     "developerName": "RunHand contributors",
     "category": "Developer Tools",
     "capabilities": [
@@ -32,7 +32,7 @@
     "defaultPrompt": [
       "Create a new simulation run from the nearest precedent.",
       "Run a bounded smoke test using site-safe scratch.",
-      "Analyze these runs and preserve only the durable result."
+      "Preview cleanup of old RunHand scratch data."
     ],
     "brandColor": "#356A5A"
   }

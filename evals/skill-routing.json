@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "description": "Expected primary routing for RunHand skill activation checks.",
+  "cases": [
+    {
+      "id": "derive-explicit-run",
+      "prompt": "1d0から0d7を作って",
+      "expected_primary": "runhand",
+      "expected_runhand_primitive": "stage-and-promote"
+    },
+    {
+      "id": "derive-and-submit",
+      "prompt": "0d7を作ってそのまま流して",
+      "expected_primary": "runhand",
+      "expected_runhand_primitive": "stage-and-promote"
+    },
+    {
+      "id": "scratch-smoke",
+      "prompt": "この設定をscratchでsmokeして",
+      "expected_primary": "runhand",
+      "expected_runhand_primitive": "scratch"
+    },
+    {
+      "id": "batch-derive-submit",
+      "prompt": "0.7、0.9、1.1を追加して流して",
+      "expected_primary": "runhand",
+      "expected_runhand_primitive": "stage-and-promote"
+    },
+    {
+      "id": "known-job-status",
+      "prompt": "job 2846659の状態を確認して",
+      "expected_primary": "site-capability",
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "parameter-explanation",
+      "prompt": "vth/vbulkの意味を説明して",
+      "expected_primary": "simulator-capability",
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "read-only-visualization",
+      "prompt": "この出力をemoutで可視化して",
+      "expected_primary": "output-capability",
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "scheduler-only-retry",
+      "prompt": "このRunをwalltimeだけ延ばして再投入して",
+      "expected_primary": "site-capability",
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "runhand-cleanup",
+      "prompt": "古いRunHand scratchを掃除して",
+      "expected_primary": "runhand-maintenance",
+      "expected_runhand_primitive": "gc"
+    },
+    {
+      "id": "runhand-doctor",
+      "prompt": "RunHandのstate rootが正常かdoctorで確認して",
+      "expected_primary": "runhand-maintenance",
+      "expected_runhand_primitive": "doctor"
+    }
+  ]
+}

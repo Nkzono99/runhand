@@ -1,8 +1,8 @@
 ---
 title: "RunHand 1.0 仕様書"
 subtitle: "Agent-driven computational research workflow accelerator"
-version: "1.0-draft.5"
-date: "2026-09-04"
+version: "1.0-draft.6"
+date: "2026-09-05"
 status: "Lean target-state specification draft"
 ---
 
@@ -13,7 +13,7 @@ status: "Lean target-state specification draft"
 | 項目 | 内容 |
 |---|---|
 | 文書状態 | Lean target-state specification draft |
-| 版 | 1.0-draft.5 |
+| 版 | 1.0-draft.6 |
 | 主対象 | HPC 上の simulation、test、analysis、submit、status 確認 |
 | 連携対象 | Simulator plugin、Site plugin（主な例: KUDPC plugin） |
 
@@ -33,7 +33,7 @@ versioned schema に置き、本書では固定しない。
 
 | Profile | 主語 | 責務 |
 |---|---|---|
-| Agent | RunHand Agent skill | intent completion、判断、専門 capability の調整 |
+| Agent | RunHand skills | intent completion、判断、専門 capability の調整 |
 | CLI | RunHand CLI | 決定論的な filesystem と local state の操作 |
 | Simulator | Simulator plugin | Run、identity、mutation、validation、runtime evidence |
 | Site | Site plugin | host、実行経路、resource、scratch、scheduler |
@@ -109,6 +109,11 @@ RunHand 1.0 は次を行わない。
 | simulation identity、入力変更、validation、正常終了 | Simulator |
 | host、allowed route、resource、submit、status、cancel | Site |
 | formal data と durable analysis artifact | 既存 research tree |
+
+System 全体の intent scope と個々の Skill の activation scope は同一ではない。core Skill は、既存 Run、
+RunHand-owned stage / scratch、新しい formal Run の間で filesystem transition が必要な場合だけ使う。
+既知 Run / Job ID の scheduler-only 操作、scratch 不要の read-only analysis、parameter や physics の説明は、
+それぞれ Site、output、Simulator capability へ直接 route する。doctor と GC は maintenance Skill が担当する。
 
 ## 2.2 Action authority
 
@@ -282,6 +287,7 @@ stage や detached job に暗黙利用しない。
 
 複数 Run を横断する analysis も通常の analysis として扱う。結果を残す依頼は analysis に
 export を加えたものとし、専用 project object や registry を作らない。
+この表は System として支援する intent を表し、すべてを core Skill の trigger にしない。
 
 ## 4.2 What may be inferred
 
@@ -301,14 +307,14 @@ submit、cancel、overwrite、delete の許可そのものは推定しない。
 ## 4.3 Precedent order
 
 Site の hard constraint と trusted capability の境界は、precedent の順位ではなく先に適用する。
-その範囲内で、候補 evidence を次の順で評価する。
+source / target が user により明示されている場合は workspace scan で再探索しない。precedent が必要な場合は、
+候補 evidence を次の順で評価する。
 
-1. current user instruction
-2. current conversation の明確な対象
-3. nearby successful sibling / parent convention
-4. nearby README / documentation
-5. recent RunHand history
-6. workspace / global default
+1. user が明示した Run
+2. current conversation が特定する current Run / series
+3. 同じ parent の Simulator-confirmed successful sibling
+4. parent directory の naming / copy convention と nearby documentation
+5. 一回の bounded context scan が返す候補
 
 実行成功や科学的同一性を主張する場合は Simulator evidence を必要とする。naming、directory layout、
 copy selection は、近傍の構造だけからも low-confidence precedent として利用できる。
@@ -715,7 +721,7 @@ exit code、JSON、filesystem diff、provider call count を観測する。
 
 | ID | Verifies | Scenario and expected result |
 |---|---|---|
-| AC-01 | RH-01, RH-02, RH-07, RH-08, RH-09, RH-12, RH-16 | unique precedent から known parameter を「作って流して」。不要な確認なし、context scan 一回で mutation、atomic no-replace create、live validation / Site route 確認、scheduler call 一回を行い、O0 で target と job identity を返す。 |
+| AC-01 | RH-01, RH-02, RH-07, RH-08, RH-09, RH-12, RH-16 | 曖昧な「前のやつ」から known parameter を「作って流して」。不要な確認なし、context scan は最大一回で mutation、atomic no-replace create、live validation / Site route 確認、scheduler call 一回を行い、O0 で target と job identity を返す。source / target が明示されている fixture では context scan は 0。 |
 | AC-02 | RH-01, RH-07, RH-08 | validator unavailable で明示 copy selection を「Run にして」。complete target は作成され、validation=unvalidated、scheduler call は 0。「smoke して」では bounded scratch Attempt だけを許可し、production submit / export は 0。 |
 | AC-03 | RH-02, RH-03, RH-07 | 既存 Run と exact job script を指定して submit する。Simulator 不在でも validation=unavailable の warning とともに scheduler call は一回。Site 不在、route unknown、禁止 host では scheduler call は 0。 |
 | AC-04 | RH-03, RH-05 | identity=unknown でも別の明示 target へは warning 付きで create できる。既存 Run の reuse / retry は判定に必要な evidence が得られるまで行わない。 |

@@ -10,7 +10,7 @@ The current implementation is the first 1.0 vertical slice:
 - unique scratch allocation with key matches treated only as reuse hints;
 - live recent/unresolved submission-history summaries without making history a gate;
 - preview-first garbage collection that protects unknown liveness;
-- a Codex plugin skill for coordinating the CLI with trusted Simulator and Site capabilities.
+- focused Codex skills for Run/stage/scratch transitions and RunHand-owned state maintenance.
 
 ## Install the Codex plugin
 
@@ -23,7 +23,7 @@ codex plugin marketplace add Nkzono99/runhand --ref main
 codex plugin add runhand@runhand
 ```
 
-Then start a new Codex session so the `runhand` skill is loaded. In the Codex CLI, you can also run `/plugins` to inspect or install plugins from registered marketplaces. Plugins are not currently supported by the Codex IDE extension; use the Codex CLI or desktop app.
+Then start a new Codex session so the `runhand` and `runhand-maintenance` skills are loaded. In the Codex CLI, you can also run `/plugins` to inspect or install plugins from registered marketplaces. Plugins are not currently supported by the Codex IDE extension; use the Codex CLI or desktop app.
 
 The plugin can invoke the CLI from its bundled source checkout. To also make the `runhand` command available directly in your shell, install the Python package:
 
@@ -58,21 +58,9 @@ PYTHONPATH=src python -m runhand --help
 
 ## Minimal workflow
 
-Create a copy plan. Its `source` must resolve to the same directory passed to `--source`.
+Have the matching Simulator capability produce a copy plan tailored to the source Run. Do not use a broad `include: ["**"]` fallback; generated outputs and binaries often need to be excluded. The plan's `source` must resolve to the same directory passed to `--source`, and its format is defined by [`schemas/v1/copy-plan.schema.json`](schemas/v1/copy-plan.schema.json).
 
-```json
-{
-  "schema": 1,
-  "source": "/project/runs/base",
-  "include": ["**"],
-  "exclude": ["output/**", "*.log"],
-  "symlink_policy": "internal-relative",
-  "completeness": "complete",
-  "basis": {"kind": "simulator"}
-}
-```
-
-Then create, inspect, and publish a stage:
+Then create and publish a stage. Inspection and dry-run are optional tools for real uncertainty, not mandatory gates:
 
 ```bash
 runhand stage create --source /project/runs/base --plan copy-plan.json --json
@@ -87,7 +75,9 @@ Other public commands are documented in [SPEC.md](SPEC.md). Versioned machine co
 
 ## Codex plugin
 
-This repository is itself the `runhand` plugin root. The manifest is [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json), and the workflow skill is [`skills/runhand/SKILL.md`](skills/runhand/SKILL.md). The plugin does not bundle a daemon or duplicate Simulator/Site knowledge; it teaches the Agent how to compose trusted capabilities and invoke this CLI.
+This repository is itself the `runhand` plugin root. The manifest is [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json). [`skills/runhand/SKILL.md`](skills/runhand/SKILL.md) handles safe Run/stage/scratch transitions, while [`skills/runhand-maintenance/SKILL.md`](skills/runhand-maintenance/SKILL.md) handles doctor and cleanup requests.
+
+The core skill does not activate for simulator-only questions, bounded read-only output analysis, or scheduler-only operations on an identified Run or Job ID. Those route directly to the matching Simulator, output, or Site capability. Routing examples are recorded in [`evals/skill-routing.json`](evals/skill-routing.json).
 
 ## Tests
 
