@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v1/scratch-evidence.schema.json",
+  "title": "RunHand caller-supplied scratch evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "task", "observed_at", "liveness", "attempt_state", "source"],
+  "properties": {
+    "schema": {"const": 1},
+    "task": {"type": "string", "pattern": "^/", "description": "Absolute path of the exact allocated scratch task."},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "liveness": {"enum": ["active", "terminal", "unknown"]},
+    "attempt_state": {"enum": ["none", "active", "terminal", "unresolved", "unknown"]},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "identity"],
+      "properties": {
+        "capability": {"enum": ["site", "simulator"]},
+        "identity": {"type": "string", "minLength": 1, "pattern": "\\S"}
+      }
+    },
+    "details": {"type": "object", "description": "Optional evidence details; secret-key fields are redacted before persistence."}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"liveness": {"const": "terminal"}}},
+      "then": {"properties": {"attempt_state": {"enum": ["none", "terminal"]}}}
+    },
+    {
+      "if": {"properties": {"liveness": {"const": "active"}}},
+      "then": {"properties": {"attempt_state": {"enum": ["none", "active", "unresolved", "unknown"]}}}
+    },
+    {
+      "if": {"properties": {"source": {"properties": {"capability": {"const": "simulator"}}}}},
+      "then": {"properties": {"attempt_state": {"const": "none"}}}
+    }
+  ],
+  "$comment": "The caller verifies specialist provenance and freshness. The CLI checks target correspondence, field consistency, and observation order; it neither discovers capabilities nor queries a scheduler. Only Site evidence may replace prior scheduler-associated state."
+}

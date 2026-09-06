@@ -6,24 +6,39 @@
       "id": "derive-explicit-run",
       "prompt": "1d0から0d7を作って",
       "expected_primary": "runhand",
-      "expected_runhand_primitive": "stage-and-promote"
+      "expected_runhand_primitive": "stage-and-promote",
+      "expected_validation_gate": false
     },
     {
       "id": "derive-and-submit",
       "prompt": "0d7を作ってそのまま流して",
       "expected_primary": "runhand",
-      "expected_runhand_primitive": "stage-and-promote"
+      "expected_handoff": "runhand-submit",
+      "expected_runhand_primitive": "stage-and-promote",
+      "expected_repeat_of_current_validation": false
     },
     {
       "id": "scratch-smoke",
       "prompt": "この設定をscratchでsmokeして",
       "expected_primary": "runhand",
-      "expected_runhand_primitive": "scratch"
+      "expected_runhand_primitive": "scratch-prepare",
+      "expected_required_task_key": false,
+      "expected_automatic_reuse_scan": false
+    },
+    {
+      "id": "known-cli-and-scratch",
+      "prompt": "runhandと前回のscratch rootはそのまま使える。指定したbaseのinput.tomlとjob.shで20stepだけ試して",
+      "expected_primary": "runhand",
+      "expected_runhand_primitive": "scratch-prepare",
+      "expected_context_calls": 0,
+      "expected_doctor_calls": 0,
+      "expected_copy_passes": 1
     },
     {
       "id": "batch-derive-submit",
       "prompt": "0.7、0.9、1.1を追加して流して",
       "expected_primary": "runhand",
+      "expected_handoff": "runhand-submit",
       "expected_runhand_primitive": "stage-and-promote"
     },
     {
@@ -47,7 +62,20 @@
     {
       "id": "scheduler-only-retry",
       "prompt": "このRunをwalltimeだけ延ばして再投入して",
-      "expected_primary": "site-capability",
+      "expected_primary": "runhand-submit",
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "lost-submit-response-retry",
+      "prompt": "前の投入は応答が切れてJob IDがわからない。このRunをもう一度流して",
+      "expected_primary": "runhand-submit",
+      "expected_runhand_primitive": null,
+      "expected_submission_without_reconciliation": false
+    },
+    {
+      "id": "known-run-submit",
+      "prompt": "このRunのjob.shを投入して",
+      "expected_primary": "runhand-submit",
       "expected_runhand_primitive": null
     },
     {

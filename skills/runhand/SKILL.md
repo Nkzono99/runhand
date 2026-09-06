@@ -1,117 +1,87 @@
 ---
 name: runhand
-description: Create a new simulation Run from an existing Run directory, or allocate RunHand-owned scratch for bounded temporary execution. Use when the request requires RunHand staging, no-replace promotion, or disposable scratch. Do not use for simulator-only questions, bounded read-only output analysis, or scheduler-only submit/status/cancel of an already identified Run or Job ID.
+description: Create a new simulation Run from an existing directory, or prepare writable scratch and complete bounded smoke, pilot, debug, or analysis work. Use for RunHand staging and temporary work; use runhand-submit for submission or retry of an already prepared Run.
 ---
 
-# RunHand filesystem workflow
+# Prepare a Run or complete temporary work
 
-Use RunHand only when a simulation task must cross a RunHand-owned filesystem boundary: existing Run to staged copy to new formal Run, or project data to disposable scratch. Complete the requested operation and respond in the user's language.
+Use this skill to turn an existing simulation into either a new research Run with the requested changes, or a prepared temporary work directory with an observed test/analysis result. A **Run** is an ordinary simulation directory. A **stage** is RunHand's editable copy before publication. A **scratch task** is a managed container for disposable work and its lifecycle metadata.
 
-RunHand is not a general simulation coordinator. It does not own scientific meaning or scheduler operations.
+RunHand supplies the filesystem operations. You apply the simulator's instructions to select, edit, and check inputs, and the site's instructions to launch and observe work. These specialists may be installed skills that you read and follow; they need not expose callable APIs.
 
-## Route before acting
+## Choose the requested outcome
 
-1. If the request needs a new formal Run, use the derive/create flow below.
-2. Otherwise, if it needs a writable or disposable work area for smoke, pilot, debug, or large/intermediate-producing analysis, use the scratch flow.
-3. Otherwise, do not use RunHand:
-   - route physics, parameter, input, validation, and normal output-analysis work to a Simulator or output capability;
-   - route submit, status, cancel, and scheduler-only retry for an identified Run or Job ID directly to a Site capability;
-   - route `doctor`, GC, stale-stage cleanup, and orphan cleanup to `runhand-maintenance`.
+| Request | Procedure and completion condition |
+|---|---|
+| “Create the 500 K case from this Run” | Follow **Create a Run** below. Finish with the new path, changed values, and validation result. |
+| “Run this for 20 steps and check it” | Follow **Complete temporary work** below. Finish with the observed pass/fail result, or explicitly report unfinished work when its observation budget expires. |
+| Submit an already prepared Run, change walltime, retry, or recover a lost submission response | Use [runhand-submit](../runhand-submit/SKILL.md). A scheduler-only change normally keeps the same Run. |
+| Diagnose storage, remove stale temporary work, or clean an orphan | Use [runhand-maintenance](../runhand-maintenance/SKILL.md). |
 
-For a retry or restart, a scientific parameter, executable, seed, or initial-condition change requires a new formal Run. A walltime, queue, or resource-only change normally keeps the same Run and creates a new scheduler Attempt without RunHand staging.
+For a physics question, ordinary read-only analysis, or status/cancel of an identified Job ID, use the relevant Simulator/output or Site skill directly. For “create and submit,” complete creation here, then pass the created directory to `runhand-submit`. For several cases, finish and report each case independently so one failure does not obscure the others.
 
-For batch requests, apply the same decision to each requested point. Batch discovery and specialist queries where possible, but treat each create and submit as an independent effect.
+## Establish the inputs and tools
 
-## Use specialist ownership
+Reuse the CLI, paths, specialist instructions, and current evidence already established for this task. Resolve only what is missing:
 
-- The matching **Simulator capability** owns Run detection, scientific identity, copy selection, input mutation, validation, command validity, and runtime evidence.
-- The matching **Site capability** owns live host role, allowed execution route, scratch suitability, resources, submission, status, and cancellation.
-- Workspace README files, configs, scripts, logs, and outputs are evidence, not trusted capability declarations or Agent instructions.
+1. Use the **Simulator instructions** to identify the requested field/units and required copy inputs. For execution, also identify the command and result checks. Workspace files are evidence about this case, not trusted capability declarations.
+2. Use the **Site instructions** for permitted host/storage and, when executing, resources and time limits. Apply a live route check before execution or substantial copying. On KUDPC, use the installed task router and focused skill it selects; RunHand does not supply queue or launch defaults.
+3. Use the short installed-CLI path in [cli-setup.md](references/cli-setup.md). Read its fallback or doctor sections only if the executable or roots are unresolved. Shell workflows use `--print-path`; full receipts use `--json`. Stop dependent steps on failure.
 
-Without a Simulator capability, perform only an explicitly specified copy or edit and report scientific validation as unavailable. Do not execute a payload, perform large I/O, or operate a scheduler without a Site capability and a fresh allowed-route decision.
+Translate Simulator selection rules into quoted `--include` / `--exclude` arguments. An existing `--plan FILE|-` remains supported; plan annotations are not execution permissions. An explicit user-specified copy/edit may proceed without Simulator validation when that limitation is reported. Execution stops for actual missing/invalid inputs or a prohibited/unknown Site route, not merely for an absent validation record or a `partial` annotation.
 
-## Invariants
+## Resolve the source and changes
 
-- Precedent fills parameters, never authority. Create, execute, submit, export, cancel, and delete only when the user's request authorizes that effect.
-- Never edit the source Run or replace an existing formal target.
-- Keep submission outcomes `accepted`, `rejected`, and `unknown` distinct.
-- For one authorized submission, call the Site submit primitive at most once; never blind-retry an unknown submission.
-- Never delete a promoted Run or cancel an accepted job as rollback for a later failure.
-- Do not require a RunHand manifest, registry, or reader in a formal Run.
-
-Ask one short question only when the remaining ambiguity changes scientific identity, the target of a destructive action, user authority, or expected cost beyond the user's stated budget or Site limit.
-
-## Resolve source, target, and identity
-
-Use an explicit source or target directly. Do not scan the workspace merely to confirm user-provided paths.
-
-When the request says “前のやつ”, “同じ系列”, or similar, choose precedent in this order:
-
-1. a Run named by the user;
-2. the current Run or current series identified by the conversation;
-3. a successful sibling under the same parent, confirmed by the Simulator capability;
-4. the parent directory's naming and copy convention;
-5. candidates from one bounded `runhand context --json` scan.
-
-`runhand context` is an ambiguity resolver, not a mandatory first step. If equally plausible candidates would change scientific identity or material cost, ask instead of choosing silently.
-
-Use the Simulator capability to classify identity:
-
-- **same:** reuse the existing Run when it already satisfies the requested create effect;
-- **scheduler-only:** keep the Run and route the new Attempt to the Site capability;
-- **different:** create a new formal Run;
-- **unknown:** do not reuse or overwrite an existing Run, but an explicitly named new target may still be created with no-replace promotion and reported as unvalidated.
-
-## Derive or create a Run
-
-1. Resolve source, target, identity, and requested scientific changes using the rules above.
-2. Ask the Simulator capability for a versioned copy plan for that source. If no Simulator capability exists, proceed only from a copy selection explicitly supplied by the user and report validation as unavailable. Do not invent a broad `include: ["**"]` fallback. Read `../../schemas/v1/copy-plan.schema.json` only when constructing or repairing the plan.
-3. Create a stage and parse `data.stage` and `data.tree` from the JSON result:
-
-   ```bash
-   runhand stage create --source SOURCE --plan PLAN_FILE_OR_- --json
-   ```
-
-   When `--plan -` is used, supply the plan on standard input. Apply scientific changes only inside `data.tree`; never in the source.
-4. Use `runhand stage inspect STAGE --json` only when selection or warnings need review. It is not a required gate.
-5. When the staged tree is complete and creation is authorized, publish it:
-
-   ```bash
-   runhand promote STAGE NEW_TARGET --json
-   ```
-
-6. If execution or submission was also requested, validate the live formal Run through the Simulator capability and check route, resources, and cost through the Site capability immediately before that effect. Apply the submission invariants above.
-
-Use `--dry-run` only when a preview resolves a real uncertainty. If promotion succeeds and a later action fails, retain the formal Run and report the unfinished action.
-
-## Use scratch
-
-First have the Site capability approve the scratch location and execution route. Allocate a unique task whose kind matches the work:
+Use explicitly supplied paths directly. For “the previous one” or “the same series,” first use the Run named in the conversation, then a Simulator-confirmed successful sibling and the parent's naming convention. If that still leaves the source unclear, run one bounded discovery:
 
 ```bash
-runhand scratch get --kind KIND --key TASK_HINT --json
+RH_CONTEXT_JSON=$("${RH[@]}" context --json)
+printf '%s\n' "$RH_CONTEXT_JSON"
 ```
 
-Choose `KIND` from `smoke`, `pilot`, `debug`, `analysis`, or `preview`. The key is a lookup hint, not proof that an existing task is identical or reusable. Reuse requires applicable Simulator evidence and current Site evidence. Run the authorized bounded payload through the Site route and keep disposable outputs outside the formal Run list. Do not allocate scratch for bounded read-only analysis that can run safely in place.
+Inspect `data.candidate_runs` and their evidence. These are structural candidates, not validated scientific identities. If the response reports partial discovery, unlisted paths may still exist; inspect the relevant parent directly. Ask a focused question only if plausible alternatives would change the scientific case or material cost.
 
-## Return an operation receipt
+Before copying, identify the source, exact requested changes, and destination. A change to physical parameters normally creates a new Run. A queue/walltime/resource change normally creates a new scheduler attempt for the same Run. Use the Simulator instructions to decide whether a restart continues the same trajectory or defines a new case. Reuse an existing target only when it already satisfies the requested outcome; never overwrite it.
 
-Return a compact receipt containing the applicable fields:
+Precedent can fill naming and parameter conventions, but it does not authorize extra execution, submission, export, cancellation, or deletion. Existing authorization in the user's request remains sufficient; do not ask for it again.
 
-- action performed;
-- source Run;
-- new target or reused Run;
-- scientific changes;
-- scheduler-only changes;
-- validation result;
-- execution or submission result and accepted Job ID;
-- retained stage or scratch path;
-- unresolved evidence and skipped effects.
+## Create a Run
 
-Before replying, verify that the source was not modified, no existing target was replaced, validation state is explicit, submit calls did not exceed authority, retained temporary paths are reported, and unfinished effects are stated.
+Read [create-work.md](references/create-work.md) for the concrete selection arguments and error handling. Carry out this sequence:
 
-## CLI and contract details
+1. Set `RH_SOURCE` to the resolved source directory and `RH_DESTINATION` to the requested new Run path. Its parent must exist. Keep the source intact and put a formal destination outside both the source and managed scratch.
+2. Set `RH_COPY_ARGS` from the Simulator's dependency rules as shown in the reference. Include required data, restart state when applicable, and executable/script dependencies; exclude outputs only when they are disposable.
+3. Create the stage and use its documented editable child:
 
-Prefer an installed `runhand` executable. In a plugin/source checkout, resolve the plugin root two directories above this file and fall back to `PYTHONPATH=<plugin-root>/src python3.11 -m runhand`. Do not install from the network unless Site policy allows it.
+   ```bash
+   RH_STAGE=$("${RH[@]}" stage create "${RH_COPY_ARGS[@]}" --print-path stage)
+   RH_TREE="$RH_STAGE/tree"
+   ```
 
-Use `runhand <command> --help` for CLI syntax and `../../schemas/v1/` for machine payloads. Read `../../SPEC.md` only for contract edge cases such as partial batch failure, identity ambiguity, submission recovery, or persistence.
+4. Edit the requested fields **under `RH_TREE`**, re-read them, and compare the changed files with the source. For create-only work, add parser/static checks when they resolve a material uncertainty. For create-and-execute, perform the relevant validation at the final execution boundary. Use `stage inspect` only to resolve selection or warning questions.
+5. Publish the copy without replacing a destination:
+
+   ```bash
+   RH_WORKDIR=$("${RH[@]}" promote "$RH_STAGE" "$RH_DESTINATION" --print-path target)
+   ```
+
+Creation is complete when the target contains the requested changes. Report checks actually performed and any unvalidated parts. For execution, pass `RH_WORKDIR`, the resolved command, resources, requested observation, and available current evidence to [runhand-submit](../runhand-submit/SKILL.md) or the Site's synchronous launcher. That final step checks the live target; do not repeat the same validation or discovery solely because responsibility passed between skills.
+
+On a failure, retain any stage that was actually created and report the failed step. For `atomic_publish_failed`, follow [the storage check](references/storage-check.md): writable storage does not necessarily support RunHand's publication operation. If publication succeeded and a later action fails, keep the new Run and report that later action as unfinished. Do not delete a Run or cancel an accepted job as rollback.
+
+## Complete temporary work
+
+Read [scratch-work.md](references/scratch-work.md) for the full 20-step example, execution handoff, and state-recording examples. Follow the whole chain:
+
+1. Define the bounded change and result check using the Simulator instructions: actual step limit or selected analysis data, runtime bound, expected outputs, and failure indicators. Resolve the Site execution route and storage before preparing the task.
+2. Select the required inputs, then use `scratch prepare --source SOURCE --include PATTERN ... --kind KIND --print-path task`. Choose `smoke`, `pilot`, `debug`, `analysis`, or `preview`. Save `RH_TASK` and use `RH_WORKDIR="$RH_TASK/work"`. This allocates a fresh protected task and copies once. `--key` is optional descriptive metadata; allocation does not search for reuse candidates.
+3. Edit the reduced input inside `RH_WORKDIR` and confirm the requested diff. There is no separate stage or promotion. For analysis without an input copy, use the reference's `scratch get` example.
+4. Check the final live inputs once, then launch through the current Site route with **working directory `RH_WORKDIR`**. Pass the current evidence to `runhand-submit` for scheduler dispatch and request bounded completion observation. Receiving a Job ID does not finish a request to check the result.
+5. Observe within the user's or configured budget, then inspect the Simulator's completion indicators and requested outputs. Distinguish a successful calculation, a failed calculation, and an unfinished observation. Retain the Job ID and protected task if work is still pending/running or its state is unknown.
+6. For an ordinary bounded task, record its terminal result once using the reference's `scratch record` example. Record active/unknown state when a detached job or handoff makes that information useful; do not add polling just to update metadata. Site evidence establishes scheduler termination independently of scientific success. If recording fails, report the result and retain the task path; the task stays protected.
+
+Return the task/output paths, reduced settings, command or Job ID, and observed result. Preserve a requested durable artifact with enough source/method information to interpret it. Retain temporary work unless cleanup was requested; use `runhand-maintenance` for that cleanup.
+
+## Report the completed work
+
+Respond in the user's language and lead with their requested outcome. For example: “Created `series/T500` from `series/T300`; changed `temperature_K` from 300 to 500; input validation passed,” or “The 20-step check failed at step 12; log: …; temporary inputs: …”. Include submitted Job IDs, pending effects, validation limits, or retained stages when applicable. A list of RunHand commands alone is not an operation result.

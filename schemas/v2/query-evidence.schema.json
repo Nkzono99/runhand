@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v2/query-evidence.schema.json",
+  "title": "RunHand Site retry query evidence v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "target", "site", "cluster", "observed_at", "result", "coverage", "attempts", "resolved_submission_keys"],
+  "properties": {
+    "schema": {"const": 2},
+    "target": {"type": "string", "minLength": 1},
+    "site": {"type": "string", "minLength": 1},
+    "cluster": {"type": "string", "minLength": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "result": {"enum": ["available", "unavailable"]},
+    "coverage": {
+      "enum": ["complete", "partial", "unknown"],
+      "description": "Complete is a current Site assertion that this target's relevant attempts are covered on this site/cluster, including accounting where required. An empty queue result alone is partial."
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["job_identity", "state"],
+        "properties": {
+          "job_identity": {"$ref": "job-identity.schema.json"},
+          "state": {"enum": ["active", "terminal", "unresolved", "unknown"]}
+        }
+      }
+    },
+    "resolved_submission_keys": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1},
+      "description": "Prior unknown submission keys positively reconciled to a terminal attempt or definite non-acceptance. A key missing from queue/accounting is not positive resolution."
+    }
+  }
+}

@@ -1,7 +1,7 @@
 ---
 title: "RunHand 1.0 仕様書"
 subtitle: "Agent-driven computational research workflow accelerator"
-version: "1.0-draft.6"
+version: "1.0-draft.7"
 date: "2026-09-05"
 status: "Lean target-state specification draft"
 ---
@@ -13,7 +13,7 @@ status: "Lean target-state specification draft"
 | 項目 | 内容 |
 |---|---|
 | 文書状態 | Lean target-state specification draft |
-| 版 | 1.0-draft.6 |
+| 版 | 1.0-draft.7 |
 | 主対象 | HPC 上の simulation、test、analysis、submit、status 確認 |
 | 連携対象 | Simulator plugin、Site plugin（主な例: KUDPC plugin） |
 
@@ -202,7 +202,7 @@ Site の live host / route を確認し、Simulator validation が利用不能�
 | RH-06 | CLI | stage / create は明示または決定論的に算出した copy selection だけを扱い、source を変更しない。安全性を確認できない external reference、dangling symlink、special file を暗黙に copy しない。copy plan は内部表現でもよく、独立した永続 object を必須としない。 |
 | RH-07 | System | formal Run の create は validation evidence を必須条件としない。execute / submit の直前に live target、execution-relevant input、command / job script、resource、host / route をその時点の状態で確認する。明確な invalid、missing、Site prohibition があれば実行せず、validator が利用不能なら unvalidated / unknown と明示する。 |
 | RH-08 | CLI | formal target は target parent の temporary sibling で構築して no-replace で公開し、既存の file、directory、symlink を上書きしない。成功時だけ complete tree を正式名で見せ、validation をこの公開操作の前提にしない。 |
-| RH-09 | System | 一つの submit action を処理する間、Site の submit primitive を呼ぶ回数は最大一回とする。submit response 前から一意に検索できる reconciliation key は unknown の照合に使う。cross-Agent duplicate protection は provider idempotency があり、Agent layer が同一 submit action の stable key を全 caller へ渡せる場合だけ保証する。条件を満たさない場合は保護を主張せず警告するが、それだけを理由に明示的な一回の submit を禁止しない。 |
+| RH-09 | System | 一つの submit action で Site の submit を呼ぶ回数は最大一回とする。応答喪失は非受理とみなさず、Site の照合手段を使う。RunHand は複数 caller 間の重複排除を保証しない。 |
 | RH-10 | System | submit result は accepted、rejected、unknown を区別し、unknown を rejected とみなして自動 retry しない。retry / restart は live scheduler evidence で active / unresolved Attempt がないと確認できた場合だけ自動 submit し、照合不能なら unknown と返す。 |
 | RH-11 | System | validation evidence は Simulator が選ぶ execution-relevant input の revision に対する確認と provenance に使う。Run tree 全体の hash、immutable snapshot、job-start 時の一致を既定の create / submit 条件にしない。 |
 | RH-12 | Agent | verification と observation を独立に選び、production の既定を O0 とし、O1 / O2 を bounded にする。verification は action の目的と損失に応じて選び、profile の消化自体を目的にしない。 |
@@ -257,14 +257,13 @@ Attempt は formal Run または scratch task に対する一回の scheduler su
 job identity は少なくとも site / cluster、Job ID、submit time を区別する。
 scheduler completion と simulator success は別の evidence とする。
 
-RunHand は user intent、target、pre-submit reconciliation key、Site が返した job identity、submit result を
-best-effort で記録できる。これは later status と unknown の照合のための evidence であり、
-Run ID、許可証、project-wide state machine ではない。
+Agent は target、Site が返した job identity、submit result、利用可能な照合情報を作業記録へ残す。
+RunHand 専用の記録形式は要求しない。
 
 ## 3.4 Scratch
 
 Scratch は stage、smoke、pilot、debug、writable / large な一時解析、preview の disposable area である。
-task key で再利用できるが、formal research tree ではない。
+常に unique task を割り当てる。既知 task を使う場合は、現在の evidence と writer の有無を確認する。
 
 payload または detached job が使う scratch root は Site capability の可視性、寿命、quota に適合しなければならない。
 prepare-only の local stage は RunHand-owned temporary area に作れる。node-local path を別 host から使う
@@ -358,6 +357,12 @@ batch は Agent が single-point workflow をまとめる。
 scheduler-only difference または同じ trajectory の continuation は同じ Run を使う。
 retry / restart 前に live scheduler evidence と利用できる local record を照合する。
 active / unresolved Attempt がある場合、または照合できない場合は自動 submit しない。
+
+filesystem の作成を伴わない retry / restart でも、Agent は `runhand-submit` の共通
+submission 契約を適用してから Site capability へ渡す。Site は scheduler の操作と照合結果を所有し、
+RunHand の submission skill は結果の解釈と追加 submit の抑止を所有する。
+対象 Run と関連 site / cluster の範囲、照合時刻、query の成否と coverage を区別する。
+queue が空という観測だけでは、受理後に応答を失った Attempt の不存在を証明しない。
 
 identity が different なら新しい Run、unknown なら確認または停止とする。
 timeout のたびに suffix directory を増やさない。
@@ -454,15 +459,22 @@ request を優先するが、background daemon は作らない。
 ## 7.1 Context and copy plan
 
 context は workspace、candidate Run、naming pattern、control file、README、prune hint、
-recent history、scratch / cache status を一回の scan で返す。
+scratch / cache status を一回の scan で返す。投入履歴は探索せず、retry / status は Site の記録と現在の観測を使う。
 
 candidate は path だけでなく reason と available evidence を持つ。generic CLI が見つける
 candidate は構造候補であり、Simulator evidence がなければ runnable / successful を主張しない。
 scan limit、permission、I/O error で不完全なら partial=true と欠落理由を返す。
 
+context の entry budget は workspace の directory entry を実際に列挙する量へ適用する。
+全 entry の列挙・sort 後に結果だけを切り詰めてはならない。予算内で列挙が完了した directory
+だけを sort して利用し、完了を確認できなかった directory は全体を省略して partial とする。
+上限と同数の entry を読み終えた場合も、終端を未確認なら保守的に partial としてよい。
+不完全な directory の filesystem 固有の列挙順で候補選択を変えない。
+
 copy selection は source、include、exclude、symlink policy、completeness を持つ。
 CLI へ渡すときは versioned copy plan として表現できるが、独立した永続 object にしない。
-Simulator evidence、明示的な user selection、または precedent から導いた場合は根拠と completeness を報告する。
+copy 対象は Simulator evidence、明示的な user selection、または precedent から決める。
+plan の basis / completeness は注釈であり、依存関係の検証や実行許可のゲートにしない。
 plan と command の source が違う場合は copy を始めない。include / exclude の厳密な pattern grammar は
 schema で versioning する。
 
@@ -472,11 +484,26 @@ FIFO、socket、device 等は、必要性と到達性が明示検証されない
 ## 7.2 Stage and promotion
 
 working stage は mutation 可能である。inspect は copy selection、stage state、known warning を返す。
-stage の作成と変更は source と formal target を変更しない。
+stage の作成と変更は source と formal target を変更しない。UUID directory を排他内で新規確保し、
+コピー中は incomplete、完了後に ready とする。未完了 stage は公開できず、bulk GC から保護する。
+
+scratch root が source と同じか source 配下にある場合、CLI は管理 directory や owner marker を
+作成する前に拒否する。symlink 解決後の配置を比較し、dry-run にも同じ配置検査を適用する。
 
 promotion は target parent 上の temporary sibling に complete tree を構築し、target が file、directory、
 symlink のいずれとして存在しても上書きせず、原子的な no-replace 操作で公開する。
 validation evidence は promotion の必須条件にしない。
+
+formal target の filesystem は Linux `renameat2(RENAME_NOREPLACE)` に対応している必要がある。
+書き込み可能性や dry-run ではこの対応を検証できない。非対応時は配置を失敗として返し、通常の rename や copy にフォールバックしない。
+内部 stage の準備はこの操作を必要としない。
+
+通常の一時実行には `scratch prepare` を使う。新しい unique task を確保し、その `work/` へ選択済み
+入力を一度だけコピーする。stage / promote を呼ばず、formal Run の原子的公開を行わないため、
+この mutable task の準備は `renameat2(RENAME_NOREPLACE)` を必要としない。
+copy selection と source 変更検知は stage と共有する。source 配下の scratch 配置と空 selection は割当前に拒否する。
+準備完了前に task の workdir を成功結果として返さず、途中失敗では protected な task の実際の path を error details に残す。
+task metadata の `preparation=ready` は入力コピーの完了だけを表し、科学的 validation や実行成功を意味しない。
 
 disk full、permission error、interrupt、concurrent promotion の失敗時に partial target を正式名で残さない。
 同じ target への concurrent promotion は最大一つだけ成功する。
@@ -486,8 +513,8 @@ promotion 後に submit が失敗しても、formal Run を自動削除しない
 ## 7.3 Execution, submission, and recovery
 
 execute / submit の直前に live target、execution-relevant input、command / job script、resource、
-host / route を確認する。Simulator validation が利用であれば、対象とした input revision、
-profile、result、validator identity / version を evidence として返す。
+host / route を確認する。Simulator validation は対象入力と実行条件が一致する新しい結果を再利用し、
+stage、公開後、submit の各段階で同じ検査を繰り返さない。
 
 revision は、過去の validation が current input に適用できるかの確認と provenance にだけ使う。
 Simulator は対象 file の digest、build ID、checkpoint identity 等の実装を選べる。RunHand は output、
@@ -497,11 +524,8 @@ log、cache、Run tree 全体の hash を要求しない。過去の evidence �
 一つの submit action を処理する間、Site の submit primitive を呼ぶ回数は最大一回とする。retry / restart では、
 live evidence で active / unresolved Attempt がないと確認できた場合だけ自動 submit する。
 
-reconciliation key は submit response 前から client が知っており、queue / accounting から一意に検索できる
-token または同等の evidence である。response で初めて得る Job ID は unknown 照合能力に含めない。
-cross-Agent duplicate protection は provider idempotency があり、Agent layer が同一 submit action を扱う
-全 caller へ同じ stable key を渡せる場合だけ保証する。後日の明示 retry / restart は別 action として
-新しい key を使う。条件を満たさない場合は duplicate_protection=best_effort と報告する。
+応答を失った投入は、対象 Run、投入時間帯、Site が提供する識別情報から照合する。
+空の queue や、返らなかった Job ID だけでは非受理を確認できない。照合不能なら unknown のまま止める。
 
 accepted、rejected、unknown の意味は次のとおりである。
 
@@ -509,15 +533,15 @@ accepted、rejected、unknown の意味は次のとおりである。
 |---|---|---|
 | accepted | scheduler が job identity を返した | O0–O2 または later status |
 | rejected | 非受理が確定した | error を報告 |
-| unknown | timeout / connection loss 等で受理有無が不明 | reconciliation key / live evidence があれば reconcile、なければ unknown_unresolved を報告 |
+| unknown | timeout / connection loss 等で受理有無が不明 | Site の live evidence で照合し、解決できなければ unknown_unresolved を報告 |
 
 unknown を rejected とみなして再投入しない。active または unresolved Attempt がある間も
 追加 submit しない。Site / Simulator が actual input identity、immutable snapshot、job-start confirmation を
 安価に提供する場合は provenance または追加保証として利用できる。これらの不在だけを
 理由に既定の submit を拒否しない。より強い frozen-input 保証は optional extension とする。
 
-submission record は作成できる場合に記録する。記録不能だけを理由に明示的な一回の submit を
-拒否しないが、recovery と cross-process duplicate protection が制限されることを事前に警告する。
+Site の receipt、Job ID、log の場所を既存の作業記録へ残す。RunHand 独自の履歴形式や記録ファイルを
+投入の前提にしない。複数 caller 間の重複排除は RunHand の機能に含めない。
 
 process interruption 後は次を区別する。
 
@@ -530,19 +554,36 @@ process interruption 後は次を区別する。
 
 ## 7.4 Scratch and GC
 
-scratch task は task key、last-used time、pin、active / terminal evidence を持てる。
-task key は検索 hint にすぎない。Simulator / Site evidence で同一 task と判定でき、active writer が
-ある場合は existing / busy を返して第二 writer を開始しない。terminal task の evidence が current request へ
-applicable かつ fresh な場合は結果を再利用できる。同一性が unknown なら別の unique task を作る。
+scratch get / prepare は常に新しい unique task を割り当て、既存 task を探索しない。
+task は last-used time、pin、active / terminal evidence を持つ。任意の key は digest として保存するラベルであり、
+再利用判定や候補探索を行わない。既知 task の利用は現在の Simulator / Site evidence で判断する。
+
+Agent は既存 terminal task を再利用する payload の前に pin し、引き継ぎ中の削除を防ぐ。
+既存 task の再利用では開始・受理を実際に観測した時点で active を記録し、新しい利用時刻を残す。
+開始を別途観測できない場合は新しい task を使うか、必要な結果を確保するまで pin を維持する。
+新規 task は unknown として保護される。実際の実行・受理・終了を観測したら、Site / Simulator が
+返した evidence を `scratch record` で記録する。完了記録後に一時的な pin を解除するが、
+既存の user pin は保持する。記録操作自体は scheduler を照合せず、科学的な正常終了も判断しない。
+evidence は exact task、観測時刻、提供元、liveness と Attempt state を区別する。
+task が terminal でも Attempt が active / unresolved / unknown という矛盾した記録や、
+既存 evidence より古い記録は受け付けない。未確認の終了を terminal に補完しない。
+保持期間は準備完了または実際の active 観測による last_used_at から計算する。
+terminal / unknown の照合結果や pin の変更は利用時刻を更新しない。観測時刻は evidence 内に別途保持する。
+
+pin、evidence 更新、stage の利用と GC の削除判断は共有排他で調整する。
+GC は候補選定後にも排他内で保護条件を再確認し、pin や再利用が先に成功した data を削除しない。
+GC が先に削除した task に対する後続の更新は失敗し、directory を再作成しない。
+排他を提供できない filesystem では、保護を保証したまま mutating operation を続行しない。
 
 runhand gc は既定で候補と見込み容量だけを表示する。--apply でのみ削除する。
-対象は RunHand-owned scratch、cache、reconciled history に限定し、次は削除しない。
+対象は RunHand-owned scratch、cache に限定し、次は削除しない。
 
 - formal research tree
 - pinned task
 - active task
 - nonterminal / unresolved Attempt に結び付く task
 - liveness や scheduler state を確認できない task
+- 旧 state/history を含む、管理対象外の記録
 
 liveness 不明な task は bulk GC から除外する。user が exact task を orphan として明示した場合だけ、
 Site での再照合を試みた後に `gc --orphan TASK --apply` で削除できる。
@@ -573,34 +614,47 @@ Site policy が network access を許す場合だけ行う。
 | Command | Purpose |
 |---|---|
 | runhand context | workspace と local precedent を一括 scan |
-| runhand stage create | copy plan から scratch stage を作る |
+| runhand stage create | 明示した pattern または copy plan から scratch stage を作る |
 | runhand stage inspect | copy selection、stage state、warning を返す |
 | runhand promote | complete stage を formal target へ atomic no-replace で配置 |
-| runhand scratch get / pin / unpin | reusable scratch task を管理 |
+| runhand scratch get / pin / unpin | unique scratch task の割当と削除保護 |
+| runhand scratch prepare | unique task の work/ へ選択した入力を一度コピー |
+| runhand scratch record | Site / Simulator の task evidence を検査して保存 |
 | runhand gc | disposable data を preview / delete |
 | runhand doctor | version、config、workspace、state / scratch、plugin cues を確認 |
+| runhand storage check | 指定 parent の atomic no-replace 対応を小さな一時 directory で検査 |
+| runhand retry check | 機械連携向けの任意の structured evidence 判定。scheduler 操作はしない |
 
 core synopsis:
 
     runhand [--workspace PATH] [--scratch-root PATH] [--state-root PATH] <command>
     runhand context [PATH] [--refresh] [--json]
     runhand stage create --source PATH --plan FILE|- [--dry-run] [--json]
+    runhand stage create --source PATH --include PATTERN [--include PATTERN ...] [--exclude PATTERN ...] [--symlink-policy internal-relative|reject] [--dry-run] [--json | --print-path stage|tree]
     runhand stage inspect STAGE [--json]
     runhand promote STAGE TARGET [--dry-run] [--json]
-    runhand scratch get --kind smoke|pilot|debug|analysis|preview --key TEXT [--pin] [--dry-run] [--json]
+    runhand scratch get --kind smoke|pilot|debug|analysis|preview [--key TEXT] [--pin] [--dry-run] [--json | --print-path task]
+    runhand scratch prepare --kind KIND [--key TEXT] --source PATH (--plan FILE|- | --include PATTERN ...) [selection options] [--pin] [--dry-run] [--json | --print-path task|workdir]
     runhand scratch pin TASK [--dry-run] [--json]
     runhand scratch unpin TASK [--dry-run] [--json]
-    runhand gc [--kind scratch|cache|history|all] [--older-than DURATION] [--apply] [--json]
+    runhand scratch record TASK --evidence FILE|- [--dry-run] [--json]
+    runhand scratch record TASK --liveness active|terminal|unknown --attempt-state none|active|terminal|unresolved|unknown --observed-at TIMESTAMP --capability site|simulator --identity TEXT [--dry-run] [--json]
+    runhand gc [--kind scratch|cache|all] [--older-than DURATION] [--apply] [--json]
     runhand gc --orphan TASK [--apply] [--json]
     runhand doctor [--json]
+    runhand storage check PARENT [PARENT ...] [--json]
+    runhand retry check --evidence FILE|- [--require-allowed] [--json]
 
-submission record と Site-provided submission mechanism は user-facing project object にしない。
-versioned provider contract は accepted / rejected / unknown、job evidence、unknown 照合用の optional
-pre-submit reconciliation key、重複排除用の optional provider idempotency と key scope を区別する。
-記録済みの unresolved state は context / doctor の warning から確認できなければならない。
+`stage create` と `scratch prepare` は同じ selection 引数と parser を使う。`--plan` と inline selection
+引数は排他。`--include` は明示し、暗黙の `**` を使わない。inline selection の default は
+`basis=user`、`completeness=partial`、`symlink_policy=internal-relative`。completeness は caller の判断であり validation ではない。
+`scratch record` の scalar form は全項目を必須とし、JSON form と同じ evidence validator に渡す。
+`observed_at` の default-now や scheduler state 推定は行わない。
 
-scratch task key は検索 hint であり、その一致だけを reuse の根拠にしない。
-runtime evidence の適用可否は Simulator capability が判断する。
+通常の retry は Site の観測に基づいて判断し、手作業で RunHand JSON を作らせない。
+structured evidence を生成する integration には任意の retry checker と schemas/v2 を提供する。
+対象、coverage、freshness が不明なら checker は retry を許可しない。
+汎用 provider request / response 契約、履歴 registry、再利用候補探索は実装対象に含めない。
 copy plan は `--plan -` で stdin から渡せ、中間 file の作成を必須としない。
 
 ## 8.3 JSON and dry-run
@@ -619,13 +673,23 @@ copy plan は `--plan -` で stdin から渡せ、中間 file の作成を必須
 warning / error は stable code、message、retryable、必要なら canonical path と details を持つ。
 ok=true は exit code 0 の場合だけとする。human-readable output と JSON は同じ結果を表す。
 
-GC 以外の全 mutating command は --dry-run を受け付け、RunHand-managed filesystem、cache、
-history、optional submission record、external service を変更しない。GC は --apply がない状態を preview とする。
+path を受け渡す shell 向けに `--print-path` を提供する。stage create は stage/tree、scratch get は task、
+scratch prepare は task/workdir、promote は target を選べる。stdout は絶対 path 一行だけで、warning / error は stderr。
+JSON と dry-run は排他とし、selector と改行を含む出力 path 等の不適合は変更前に拒否する。
+失敗時は stdout に path を出さず、準備途中の retained task がある場合は stderr / JSON error details に含める。
+`stage/tree` と `task/work` はこのワークフローの公開 layout とする。
 
-context、copy plan、validation evidence、provider request / response、optional submission
-record の schema は schemas/v1 に置き、
-同一 major version 内で後方互換にする。該当 schema を同梱する前に関連 command または
-provider contract の 1.0 conformance を主張しない。
+`retry check` は通常、blocked / unknown も正常な判定結果として data.decision に返す。
+`--require-allowed` 時はその二状態を exit 3 の retry_not_allowed とし、details に decision/reason を保持する。
+`storage check` は非対応または I/O 失敗時に exit 5 と全 parent の details.checks を返す。
+これらの独立した check は workspace/config の読み込みを必須としない。
+
+GC 以外の永続状態を変更する command は --dry-run を受け付け、preview では RunHand-managed filesystem、cache、
+external service を変更しない。GC は --apply がない状態を preview とする。
+storage check は明示した既存 parent に小さな unique probe directory を作って消す診断であり、owner marker や管理 root を作成しない。
+
+context、copy plan、scratch evidence の schema は schemas/v1、任意の retry checker の入力は
+schemas/v2 に置く。使われていない汎用 provider / validation / submission-record schema は配布しない。
 
 ## 8.4 Exit codes
 
@@ -637,7 +701,6 @@ provider contract の 1.0 conformance を主張しない。
 | 3 | ambiguity / collision / unsafe target |
 | 4 | plan / validation precondition failure |
 | 5 | filesystem / local state I/O failure |
-| 6 | provider compatibility / requested integration failure |
 
 CLI Core は batch transaction を持たないため、partial batch exit code は定義しない。
 
@@ -663,16 +726,10 @@ unsupported major、invalid type / range、矛盾した config は exit code 2 �
 
 scratch root が未指定なら Site-recommended scratch、次に XDG cache、最後に workspace 内の
 RunHand-owned hidden area を候補にする。state root が未指定なら XDG state を候補にする。
-cross-control-host duplicate protection は Site-provided idempotency と同一 submit action の shared stable key が
-ある場合だけ保証し、なければその限界を報告する。
 
 minimal config:
 
     version = 1
-
-    [behavior]
-    verification = "adaptive"
-    observation = "adaptive"
 
     [observation]
     completion_budget_seconds = 600
@@ -680,15 +737,17 @@ minimal config:
     [scratch]
     # root = "/site/appropriate/path"
     ttl_days = 14
-    history_ttl_days = 90
-    max_gib = 50
 
     [state]
     # root = "/shared/durable/path"
 
     [context]
     max_depth = 8
+    max_entries = 10000
     warm_cache = true
+
+verification / observation の方針は Agent が依頼と現在の evidence から選ぶ。CLI で使われていなかった
+`[behavior]`、`[scratch].max_gib`、`[scratch].history_ttl_days` は削除した。旧設定にあれば取り除く。
 
 ## 9.2 Performance
 
@@ -708,8 +767,8 @@ cold context 約 5 秒とする。これは filesystem と hardware 条件を記
 - RunHand CLI 1.0 の最低 Python は 3.11 とする。
 - core dependency は小さく保ち、offline / cached installation を優先する。
 - cache corruption は live rescan で回復する。
-- cache / history failure は scientific result を失わせない。
-- optional submission record を保存できない場合は警告し、recovery や duplicate protection を主張しない。
+- cache failure は scientific result を失わせない。
+- 旧 state/history のデータは移行や削除を行わず、そのまま残す。
 - RunHand を削除しても Run、input、output、README、durable analysis artifact を通常 tool で利用できる。
 
 ---
@@ -729,8 +788,8 @@ exit code、JSON、filesystem diff、provider call count を観測する。
 | AC-06 | RH-06 | create 前後で source は不変。unsafe symlink、special file、copy 中の source inconsistency を検出した場合は失敗し、formal target を残さない。 |
 | AC-07 | RH-08 | target が file、directory、symlink のいずれかとして存在する場合は上書きしない。concurrent create は最大一つだけ成功し、disk full、permission error、interrupt でも partial target を正式名で残さない。 |
 | AC-08 | RH-07, RH-11 | 過去の validation 後に execution-relevant input を変更する。submit 直前に live target へ validation を再適用し、明確な invalid なら scheduler call は 0。output や Run tree 全体の hash は判定条件にしない。 |
-| AC-09 | RH-09 | Site が provider idempotency を提供し、Agent layer が同一 submit action の concurrent caller へ同じ key を渡すと accepted Attempt は最大一つ。後日の明示 retry は別 key になる。いずれかを提供できない場合は明示 submit を妨げず submit primitive を一回呼び、duplicate_protection=best_effort を返す。 |
-| AC-10 | RH-09, RH-10 | scheduler が受理後に応答を失う fixture で submit primitive call は一回、result は unknown、自動 retry は 0。pre-submit reconciliation key ありなら live evidence で照合し、なしなら unknown_unresolved を返す。submission record が書けなくても最初の明示 submit は禁止せず、recovery_unavailable を返す。 |
+| AC-09 | RH-09 | 通常の明示 submit は Site を一回だけ呼び、独自 JSON、registry、idempotency key の作成を前提にしない。 |
+| AC-10 | RH-09, RH-10 | scheduler が受理後に応答を失う fixture で submit call は一回、result は unknown、自動 retry は 0。Site の live evidence で照合できなければ unknown_unresolved を返す。 |
 | AC-11 | RH-10 | retry / restart 前の live query で active Attempt が見つかるか、query 自体が失敗した場合、submit primitive call は 0。後者は unknown と返し、success / rejected と表現しない。 |
 | AC-12 | RH-02, RH-11 | login node fixture の smoke / analysis / large I/O は local heavy payload 0 で Site route を使う。既定 workflow は immutable snapshot や RunHand 固有の job-start revision check を要求しない。 |
 | AC-13 | RH-03, RH-12 | O0 accepted production は polling 0。O1 PENDING は snapshot 一回、sleep 0 で pending_startup_unobserved。O2 が budget 内に terminal evidence を得なければ still_running_detached とし、success と表現しない。 |
@@ -739,6 +798,10 @@ exit code、JSON、filesystem diff、provider call count を観測する。
 | AC-16 | RH-15 | --json usage error は object 一つ、ok=false、exit 2。filesystem mutating command の dry-run 前後で source、target、managed state は同一。 |
 | AC-17 | RH-17 | 複数 Run の bounded read-only analysis は scratch 作成なし、writable intermediate を要する analysis は scratch で行う。export した artifact は専用 reader なしで resolved source、selection、method を確認でき、RunHand 削除後も利用できる。secret fixture は state / JSON で redacted する。 |
 | AC-18 | RH-15 | config は CLI > env > workspace > global > Site default > built-in で解決し、invalid config は exit 2 で一部適用しない。 |
+| AC-19 | RH-06 | scratch root を source 内へ指定した create と dry-run は、owner marker を含め書き込み 0 で拒否する。 |
+| AC-20 | RH-04, RH-15 | 大きな flat directory の context scan で実際の entry 列挙数が予算を超えず、不完全 directory の列挙順を入れ替えても候補結果が変わらない。 |
+| AC-21 | RH-14 | GC の候補選定後に pin / active evidence 更新が成功した task は削除しない。GC 完了後の record / pin は task を再作成しない。正常終了の evidence を記録した task は保存期間後に通常 GC で回収できる。 |
+| AC-22 | RH-09, RH-10 | filesystem 作成を伴わない retry でも、以前の unknown Attempt、query 不可、partial coverage、異なる target / cluster の evidence から submit しない。完全な live 照合でのみ許可し、受理後の応答消失を自動再投入しない。 |
 
 ---
 
@@ -753,7 +816,7 @@ exit code、JSON、filesystem diff、provider call count を観測する。
 | Scratch | stage、test、analysis 用の disposable area |
 | Precedent | nearby Run、naming、README、recent activity から得る local evidence |
 | Stage | formal target へ配置する前の working copy |
-| Promote | complete stage を formal target へ atomic no-replace で配置する操作 |
+| Promote | complete stage を選んだ target へ atomic no-replace で配置する操作。scratch task 内の作業先にも使用できる |
 | V0–V3 | verification profile |
 | O0–O2 | observation mode |
 | Unknown | evidence が足りず、success / failure に丸めない状態 |

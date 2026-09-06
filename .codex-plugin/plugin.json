@@ -1,7 +1,7 @@
 {
   "name": "runhand",
   "version": "0.3.0",
-  "description": "Safe simulation Run staging, no-replace promotion, disposable scratch, and RunHand-owned state maintenance.",
+  "description": "Safe simulation Run staging, disposable scratch with runtime evidence, submission/retry handoff, and local-state maintenance.",
   "author": {
     "name": "Jin Nakazono",
     "url": "https://github.com/Nkzono99/runhand"
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "RunHand",
     "shortDescription": "Stage and publish simulation Runs safely.",
-    "longDescription": "Moves simulation work safely from an existing Run into a disposable stage and then into a new no-replace formal Run, or allocates scratch for bounded temporary work. Scientific semantics remain with Simulator capabilities, scheduler semantics remain with Site capabilities, and maintenance cleanup is isolated in a focused companion skill.",
+    "longDescription": "Moves simulation work from an existing Run into a disposable stage and a new no-replace formal Run, or allocates scratch with recorded runtime evidence and coordinated cleanup. Scientific semantics remain with Simulator capabilities and scheduler operations with Site capabilities; a submission companion preserves retry and uncertain-submission checks across that handoff.",
     "developerName": "RunHand contributors",
     "category": "Developer Tools",
     "capabilities": [

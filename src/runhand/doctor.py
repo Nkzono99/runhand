@@ -10,7 +10,6 @@ from typing import Any
 
 from . import __version__
 from .config import Config
-from .history import history_summary, history_warnings
 from .result import Result, warning
 from .storage import OWNER_FILE, read_json
 
@@ -62,8 +61,6 @@ def run_doctor(config: Config) -> Result:
     repository_root = Path(__file__).resolve().parents[2]
     manifest = repository_root / ".codex-plugin" / "plugin.json"
     skill = repository_root / "skills" / "runhand" / "SKILL.md"
-    history = history_summary(config.state_root)
-    warnings.extend(history_warnings(history))
     return Result(
         "doctor",
         {
@@ -79,8 +76,6 @@ def run_doctor(config: Config) -> Result:
                 "manifest": str(manifest) if manifest.is_file() else None,
                 "skill": str(skill) if skill.is_file() else None,
             },
-            "history": history,
-            "unresolved_history": history["unresolved"],
         },
         warnings,
     )

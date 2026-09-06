@@ -5,13 +5,12 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
-import posixpath
 import shutil
 import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Iterable, NoReturn
 
 from .errors import LocalIOError, PlanError
 
@@ -72,6 +71,11 @@ def load_copy_plan(path: str, source_argument: str) -> CopyPlan:
         raise PlanError(
             "copy_plan_read_failed", f"cannot read copy plan: {exc}"
         ) from exc
+    return parse_copy_plan(raw, source_argument)
+
+
+def parse_copy_plan(raw: Any, source_argument: str) -> CopyPlan:
+    """Use the same contract for JSON plans and explicit CLI selections."""
     if not isinstance(raw, dict):
         raise PlanError("invalid_copy_plan", "copy plan must be a JSON object")
     allowed = {
@@ -255,28 +259,69 @@ def select_entries(plan: CopyPlan) -> list[Entry]:
             )
 
     walk(plan.source, PurePosixPath())
-    materialized: set[str] = {"."}
+    materialized: dict[str, tuple[str, str | None]] = {".": ("directory", None)}
     for entry in entries:
         if entry.kind == "guard":
             continue
         current = PurePosixPath(entry.relative)
-        materialized.add(current.as_posix())
+        materialized[current.as_posix()] = (entry.kind, entry.link_target)
         for parent in current.parents:
-            materialized.add(parent.as_posix())
+            materialized.setdefault(parent.as_posix(), ("directory", None))
     for entry in entries:
         if entry.kind != "symlink" or entry.link_target is None:
             continue
-        lexical_target = posixpath.normpath(
-            (PurePosixPath(entry.relative).parent / entry.link_target).as_posix()
-        )
-        if lexical_target not in materialized:
-            raise PlanError(
-                "uncopied_symlink_target",
-                "selected symlink target is excluded from the copy selection",
-                path=plan.source / entry.relative,
-                details={"target": lexical_target},
-            )
+        _verify_selected_link(plan.source, entry, materialized)
     return entries
+
+
+def _verify_selected_link(
+    source: Path,
+    entry: Entry,
+    materialized: dict[str, tuple[str, str | None]],
+) -> None:
+    """Resolve the link through the selected destination graph, component by component."""
+
+    def unresolved(reason: str) -> NoReturn:
+        raise PlanError(
+            "uncopied_symlink_target",
+            "selected symlink target cannot be resolved in the copy selection",
+            path=source / entry.relative,
+            details={"target": entry.link_target, "reason": reason},
+        )
+
+    def resolve(
+        current: tuple[str, ...], parts: list[str], active: frozenset[str]
+    ) -> tuple[str, ...]:
+        for part in parts:
+            parent = "/".join(current) or "."
+            if materialized.get(parent, (None, None))[0] != "directory":
+                unresolved(f"intermediate path is not a selected directory: {parent}")
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if not current:
+                    unresolved("target escapes the selected tree")
+                current = current[:-1]
+                continue
+            candidate = current + (part,)
+            path = "/".join(candidate)
+            selected = materialized.get(path)
+            if selected is None:
+                unresolved(f"path component is excluded from the copy selection: {path}")
+            kind, target = selected
+            if kind == "symlink":
+                if path in active:
+                    unresolved(f"selected symlink cycle: {path}")
+                current = resolve(current, (target or "").split("/"), active | {path})
+            else:
+                current = candidate
+        return current
+
+    resolve(
+        PurePosixPath(entry.relative).parent.parts,
+        (entry.link_target or "").split("/"),
+        frozenset({entry.relative}),
+    )
 
 
 def _verify_entry(source: Path, entry: Entry) -> None:

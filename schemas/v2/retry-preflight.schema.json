@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Nkzono99/runhand/schemas/v2/retry-preflight.schema.json",
+  "title": "RunHand pure retry decision input v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["target", "scopes", "not_before", "queries", "pending_keys", "unresolved_without_key"],
+  "properties": {
+    "target": {"type": "string", "minLength": 1},
+    "scopes": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "description": "All relevant site/cluster pairs, including those in known previous attempts. If their extent is unknown, no complete preflight can be claimed.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["site", "cluster"],
+        "properties": {"site": {"type": "string", "minLength": 1}, "cluster": {"type": "string", "minLength": 1}}
+      }
+    },
+    "not_before": {"type": "string", "format": "date-time", "description": "Start of this retry preflight, captured before the live queries."},
+    "queries": {"type": "array", "items": {"$ref": "query-evidence.schema.json"}},
+    "pending_keys": {
+      "type": "array", "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["site", "cluster", "key"],
+        "properties": {
+          "site": {"type": "string", "minLength": 1},
+          "cluster": {"type": "string", "minLength": 1},
+          "key": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "unresolved_without_key": {"type": "boolean"}
+  }
+}

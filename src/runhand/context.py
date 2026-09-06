@@ -8,7 +8,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import Config
-from .history import history_summary, history_warnings
 from .result import Result, warning
 from .storage import (
     atomic_write_json,
@@ -29,6 +28,7 @@ _PRUNE_NAMES = {
     "node_modules",
     ".runhand",
 }
+_SCAN_VERSION = 3
 
 
 def _cache_path(config: Config) -> Path:
@@ -39,6 +39,7 @@ def _cache_path(config: Config) -> Path:
 def _root_signature(root: Path, max_depth: int, max_entries: int) -> dict[str, Any]:
     info = root.stat()
     return {
+        "scan_version": _SCAN_VERSION,
         "device": info.st_dev,
         "inode": info.st_ino,
         "mtime_ns": info.st_mtime_ns,
@@ -111,9 +112,7 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
         if cached is not None:
             cached = dict(cached)
             cached["scratch"] = _scratch_status(config)
-            cached["history"] = history_summary(config.state_root)
             cached["cache"] = {"status": "hit", "path": str(_cache_path(config))}
-            warnings.extend(history_warnings(cached["history"]))
             return Result("context", cached, warnings)
 
     candidates: dict[str, dict[str, Any]] = {}
@@ -147,6 +146,13 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
     def walk(directory: Path, depth: int) -> None:
         nonlocal visited, budget_exhausted
         if budget_exhausted:
+            partial_reasons.append(
+                {
+                    "code": "max_entries",
+                    "path": str(directory),
+                    "message": "directory omitted after context entry limit reached",
+                }
+            )
             return
         if depth > config.context_max_depth:
             partial_reasons.append(
@@ -158,9 +164,31 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
             )
             return
         try:
-            children = sorted(
-                os.scandir(directory), key=lambda item: os.fsencode(item.name)
-            )
+            children = []
+            with os.scandir(directory) as scanner:
+                while visited < config.context_max_entries:
+                    try:
+                        child = next(scanner)
+                    except StopIteration:
+                        break
+                    children.append(child)
+                    visited += 1
+                else:
+                    # Without reading beyond the budget we cannot establish
+                    # whether this directory is complete. Discard it as a
+                    # whole so filesystem enumeration order cannot select an
+                    # arbitrary subset of candidates. This also conservatively
+                    # omits a directory that exactly fills the remaining cap.
+                    budget_exhausted = True
+                    partial_reasons.append(
+                        {
+                            "code": "max_entries",
+                            "path": str(directory),
+                            "message": "directory omitted because enumeration reached the context entry limit",
+                        }
+                    )
+                    return
+            children.sort(key=lambda item: os.fsencode(item.name))
         except OSError as exc:
             partial_reasons.append(
                 {
@@ -171,17 +199,6 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
             )
             return
         for child in children:
-            if visited >= config.context_max_entries:
-                budget_exhausted = True
-                partial_reasons.append(
-                    {
-                        "code": "max_entries",
-                        "path": str(directory),
-                        "message": "context entry limit reached",
-                    }
-                )
-                return
-            visited += 1
             path = Path(child.path)
             rel = relative(path)
             try:
@@ -232,7 +249,6 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
         "prune_hints": sorted(prune_hints, key=os.fsencode),
         "naming_patterns": _naming_patterns(candidates),
         "scratch": _scratch_status(config),
-        "history": history_summary(config.state_root),
         "cache": {"status": "miss" if config.warm_cache else "disabled"},
         "scan": {
             "entries_visited": visited,
@@ -244,7 +260,6 @@ def scan_context(config: Config, *, refresh: bool) -> Result:
         cache_warning = _write_cache(config, data)
         if cache_warning is not None:
             warnings.append(cache_warning)
-    warnings.extend(history_warnings(data["history"]))
     return Result("context", data, warnings)
 
 

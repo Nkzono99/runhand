@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import fcntl
+import hashlib
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +18,7 @@ from .security import redact_sensitive
 
 OWNER_FILE = ".runhand-owner.json"
 OWNER_SCHEMA = 1
+LOCK_FILE = ".runhand.lock"
 
 
 def utc_now() -> str:
@@ -37,9 +42,12 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+def atomic_write_json(
+    path: Path, value: dict[str, Any], *, create_parents: bool = True
+) -> None:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if create_parents:
+            path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         temp_path = Path(temporary)
         try:
@@ -62,6 +70,62 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         raise LocalIOError(
             "state_write_failed", f"cannot write local state: {exc}", path=path
         ) from exc
+
+
+@contextmanager
+def managed_root_lock(
+    root: Path, kind: str, *, target: Path | None = None
+) -> Iterator[None]:
+    """Exclude cooperating mutations across processes on the shared root.
+
+    The lock inode lives outside disposable children and is never unlinked.
+    A target lock serializes only that object's mutation, including deletion.
+    A filesystem without shared flock support is not a supported mutation
+    route; failures never fall back to unlocked writes. Previews do not call
+    this helper, so they neither create lock files nor change managed state.
+    """
+    require_owned_root(root, kind)
+    if target is None:
+        path = root / LOCK_FILE
+    else:
+        if not is_within(target, root) or target.resolve() == root.resolve():
+            raise UnsafeError("invalid_lock_target", "lock target is outside managed root", path=target)
+        lock_root = ensure_owned_subdir(root, kind, ".runhand-locks")
+        digest = hashlib.sha256(os.fsencode(str(target.resolve()))).hexdigest()
+        path = lock_root / f"{digest}.lock"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise UnsafeError(
+                "invalid_managed_lock", "managed lock is not a regular file", path=path
+            )
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise LocalIOError(
+                "managed_root_busy",
+                "another RunHand mutation holds the managed root lock",
+                path=root,
+                retryable=True,
+            ) from exc
+    except OSError as exc:
+        if descriptor is not None:
+            os.close(descriptor)
+            descriptor = None
+        raise LocalIOError(
+            "managed_lock_failed", f"cannot lock managed root: {exc}", path=root
+        ) from exc
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    try:
+        require_owned_root(root, kind)
+        yield
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def ensure_owned_root(root: Path, kind: str) -> None:

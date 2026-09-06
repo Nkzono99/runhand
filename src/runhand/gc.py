@@ -9,12 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
-from .errors import LocalIOError, PlanError, UnsafeError
-from .history import is_history_record
+from .errors import LocalIOError, PlanError, RunHandError, UnsafeError
 from .result import Result
-from .scratch import TASK_META, _load_task
+from .scratch import TASK_KINDS, TASK_META, _load_task
 from .stage import STAGE_META
-from .storage import OWNER_FILE, is_within, read_json, require_owned_root, root_is_owned
+from .storage import OWNER_FILE, is_within, managed_root_lock, read_json, require_owned_root, root_is_owned
 
 
 def parse_duration(value: str | None, default_days: int) -> timedelta:
@@ -64,6 +63,31 @@ def _tree_size(path: Path) -> int:
     return total
 
 
+def _stage_reason(meta: dict[str, Any], last_used: datetime, cutoff: datetime) -> str | None:
+    if meta.get("pinned", False):
+        return "pinned"
+    if last_used > cutoff:
+        return "fresh"
+    if meta.get("state") == "ready":
+        return "nonterminal"
+    if meta.get("state") != "promoted":
+        return "state_unknown"
+    return None
+
+
+def _task_reason(meta: dict[str, Any], last_used: datetime, cutoff: datetime) -> str | None:
+    if meta.get("pinned", False):
+        return "pinned"
+    if last_used > cutoff:
+        return "fresh"
+    if meta.get("liveness") != "terminal":
+        return "liveness_unknown" if meta.get("liveness") == "unknown" else "nonterminal"
+    # Missing or malformed attempt evidence is not proof of no active writer.
+    if meta.get("attempt_state") not in ("none", "terminal"):
+        return "attempt_unresolved"
+    return None
+
+
 def _stage_candidates(
     config: Config, cutoff: datetime
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -97,7 +121,7 @@ def _stage_candidates(
         if not stage.is_dir() or not meta_path.is_file():
             continue
         try:
-            if stage.is_symlink():
+            if stage.is_symlink() or meta_path.is_symlink():
                 raise ValueError("stage entry is a symlink")
             meta = read_json(meta_path)
             if (
@@ -117,15 +141,7 @@ def _stage_candidates(
                 }
             )
             continue
-        reason = None
-        if meta.get("pinned", False):
-            reason = "pinned"
-        elif last_used > cutoff:
-            reason = "fresh"
-        elif meta.get("state") == "ready":
-            reason = "nonterminal"
-        elif meta.get("state") != "promoted":
-            reason = "state_unknown"
+        reason = _stage_reason(meta, last_used, cutoff)
         item = {
             "path": str(stage),
             "kind": "scratch",
@@ -204,7 +220,7 @@ def _task_candidates(
         if not meta_path.is_file():
             continue
         try:
-            if task.is_symlink():
+            if task.is_symlink() or meta_path.is_symlink():
                 raise ValueError("task entry is a symlink")
             meta = read_json(meta_path)
             expected_kind = task.parent.name
@@ -212,6 +228,7 @@ def _task_candidates(
                 meta.get("schema") != 1
                 or meta.get("owner") != "runhand"
                 or meta.get("kind") != expected_kind
+                or expected_kind not in TASK_KINDS
             ):
                 raise ValueError("task metadata is not owned or compatible")
             last_used = _parse_time(meta.get("last_used_at"), task.stat().st_mtime)
@@ -225,19 +242,7 @@ def _task_candidates(
                 }
             )
             continue
-        reason = None
-        if meta.get("pinned", False):
-            reason = "pinned"
-        elif last_used > cutoff:
-            reason = "fresh"
-        elif meta.get("liveness") != "terminal":
-            reason = (
-                "liveness_unknown"
-                if meta.get("liveness") == "unknown"
-                else "nonterminal"
-            )
-        elif meta.get("attempt_state") in {"active", "unresolved", "unknown"}:
-            reason = "attempt_unresolved"
+        reason = _task_reason(meta, last_used, cutoff)
         item = {
             "path": str(task),
             "kind": "scratch",
@@ -252,105 +257,107 @@ def _task_candidates(
     return deletable, protected
 
 
-def _state_candidates(
-    config: Config, kind: str, cutoff: datetime
+def _cache_candidates(
+    config: Config, cutoff: datetime
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     deletable: list[dict[str, Any]] = []
     protected: list[dict[str, Any]] = []
-    requested = {kind} if kind in {"cache", "history"} else {"cache", "history"}
-    for item_kind in sorted(requested):
-        root = config.state_root / item_kind
-        if root.is_symlink() or (
-            root.exists() and not is_within(root, config.state_root)
-        ):
+    root = config.state_root / "cache"
+    if root.is_symlink() or (
+        root.exists() and not is_within(root, config.state_root)
+    ):
+        protected.append(
+            {"path": str(root), "kind": "cache", "reason": "unsafe_container"}
+        )
+        return deletable, protected
+    if not root.is_dir():
+        return deletable, protected
+    for path in sorted(root.iterdir(), key=lambda value: os.fsencode(value.name)):
+        if path.name == OWNER_FILE:
+            continue
+        if not is_within(path, config.state_root):
             protected.append(
-                {
-                    "path": str(root),
-                    "kind": item_kind,
-                    "reason": "unsafe_container",
-                }
+                {"path": str(path), "kind": "cache", "reason": "root_escape"}
             )
             continue
-        if not root.is_dir():
-            continue
-        for path in sorted(root.iterdir(), key=lambda value: os.fsencode(value.name)):
-            if path.name == OWNER_FILE:
-                continue
-            if not is_within(path, config.state_root):
-                protected.append(
-                    {
-                        "path": str(path),
-                        "kind": item_kind,
-                        "reason": "root_escape",
-                    }
-                )
-                continue
-            try:
-                modified = datetime.fromtimestamp(path.lstat().st_mtime, timezone.utc)
-            except OSError as exc:
-                protected.append(
-                    {
-                        "path": str(path),
-                        "kind": item_kind,
-                        "reason": "stat_error",
-                        "detail": str(exc),
-                    }
-                )
-                continue
-            entry = {
-                "path": str(path),
-                "kind": item_kind,
-                "bytes": _tree_size(path) if path.is_dir() else path.lstat().st_size,
-            }
-            try:
-                if path.is_symlink() or not path.is_file():
-                    raise ValueError("state entry is not a regular file")
-                record = read_json(path)
-            except Exception as exc:
-                entry["reason"] = f"{item_kind}_unknown"
-                entry["detail"] = str(exc)
-                protected.append(entry)
-                continue
-            compatible = (
-                record.get("schema") == 1
-                and record.get("owner") == "runhand"
-                and record.get("kind") == "cache"
-                if item_kind == "cache"
-                else is_history_record(record)
+        try:
+            modified = datetime.fromtimestamp(path.lstat().st_mtime, timezone.utc)
+        except OSError as exc:
+            protected.append(
+                {"path": str(path), "kind": "cache", "reason": "stat_error", "detail": str(exc)}
             )
-            if not compatible:
-                entry["reason"] = f"{item_kind}_incompatible"
-                protected.append(entry)
-                continue
-            if item_kind == "history":
-                if record.get("reconciled") is not True:
-                    entry["reason"] = "history_unreconciled"
-                    protected.append(entry)
-                    continue
-                if (
-                    record.get("result") == "accepted"
-                    and record.get("attempt_state") != "terminal"
-                ):
-                    entry["reason"] = "history_nonterminal"
-                    protected.append(entry)
-                    continue
-            if modified <= cutoff:
-                deletable.append(entry)
-            else:
-                entry["reason"] = "fresh"
-                protected.append(entry)
+            continue
+        entry = {
+            "path": str(path), "kind": "cache",
+            "bytes": _tree_size(path) if path.is_dir() else path.lstat().st_size,
+        }
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("cache entry is not a regular file")
+            record = read_json(path)
+        except Exception as exc:
+            entry.update(reason="cache_unknown", detail=str(exc))
+            protected.append(entry)
+            continue
+        if (record.get("schema"), record.get("owner"), record.get("kind")) != (1, "runhand", "cache"):
+            entry["reason"] = "cache_incompatible"
+            protected.append(entry)
+        elif modified <= cutoff:
+            deletable.append(entry)
+        else:
+            entry["reason"] = "fresh"
+            protected.append(entry)
     return deletable, protected
+
+
+def _live_candidate_reason(
+    config: Config, path: Path, kind: str, cutoff: datetime
+) -> str | None:
+    """Recheck one selected object under its mutation lock, without a tree scan."""
+    root = config.scratch_root if kind == "scratch" else config.state_root
+    try:
+        relative = path.relative_to(root)
+        if not relative.parts or not is_within(path, root):
+            return "root_escape"
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                return "unsafe_container"
+        if not path.exists():
+            return "disappeared"
+        if kind == "scratch":
+            if path.parent == root / "stages":
+                meta_path = path / STAGE_META
+                if meta_path.is_symlink() or not path.is_dir():
+                    return "metadata_unknown"
+                meta = read_json(meta_path)
+                if (meta.get("schema"), meta.get("owner"), meta.get("kind")) != (1, "runhand", "stage"):
+                    return "metadata_unknown"
+                last_used = _parse_time(meta.get("last_used_at"), path.stat().st_mtime)
+                return _stage_reason(meta, last_used, cutoff)
+            _, meta = _load_task(config, str(path))
+            last_used = _parse_time(meta.get("last_used_at"), path.stat().st_mtime)
+            return _task_reason(meta, last_used, cutoff)
+        if path.parent != root / kind or not path.is_file():
+            return f"{kind}_incompatible"
+        record = read_json(path)
+        if (record.get("schema"), record.get("owner"), record.get("kind")) != (1, "runhand", "cache"):
+            return "cache_incompatible"
+        modified = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        return "fresh" if modified > cutoff else None
+    except (OSError, RunHandError, ValueError):
+        return "metadata_unknown"
 
 
 def collect(
     config: Config, *, kind: str, older_than: str | None, apply: bool
 ) -> Result:
-    if kind not in {"scratch", "cache", "history", "all"}:
+    if kind not in {"scratch", "cache", "all"}:
         raise PlanError("invalid_gc_kind", "unsupported GC kind")
     now = datetime.now(timezone.utc)
     scratch_cutoff = now - parse_duration(older_than, config.scratch_ttl_days)
     cache_cutoff = now - parse_duration(older_than, config.scratch_ttl_days)
-    history_cutoff = now - parse_duration(older_than, config.history_ttl_days)
     candidates: list[dict[str, Any]] = []
     protected: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -371,7 +378,7 @@ def collect(
                 found, kept = provider(config, scratch_cutoff)
                 candidates.extend(found)
                 protected.extend(kept)
-    if kind in {"cache", "history", "all"}:
+    if kind in {"cache", "all"}:
         if config.state_root.exists() and not root_is_owned(config.state_root, "state"):
             warnings.append(
                 {
@@ -382,20 +389,36 @@ def collect(
                 }
             )
         elif root_is_owned(config.state_root, "state"):
-            requested = ("cache", "history") if kind == "all" else (kind,)
-            for state_kind in requested:
-                state_cutoff = cache_cutoff if state_kind == "cache" else history_cutoff
-                found, kept = _state_candidates(config, state_kind, state_cutoff)
-                candidates.extend(found)
-                protected.extend(kept)
+            found, kept = _cache_candidates(config, cache_cutoff)
+            candidates.extend(found)
+            protected.extend(kept)
     candidates.sort(key=lambda item: os.fsencode(item["path"]))
     protected.sort(key=lambda item: os.fsencode(item["path"]))
     deleted: list[str] = []
     if apply:
+        live_candidates = []
         for item in candidates:
             path = Path(item["path"])
-            _remove_owned_candidate(config, path, item["kind"])
-            deleted.append(str(path))
+            item_kind = item["kind"]
+            root, owner_kind = (
+                (config.scratch_root, "scratch") if item_kind == "scratch" else (config.state_root, "state")
+            )
+            cutoff = scratch_cutoff if item_kind == "scratch" else cache_cutoff
+            try:
+                with managed_root_lock(root, owner_kind, target=path):
+                    reason = _live_candidate_reason(config, path, item_kind, cutoff)
+                    if reason is None:
+                        _remove_owned_candidate(config, path, item_kind)
+                        deleted.append(str(path))
+                        live_candidates.append(item)
+            except LocalIOError as exc:
+                if exc.code != "managed_root_busy":
+                    raise
+                reason = "busy"
+            if reason is not None:
+                protected.append({**item, "reason": reason})
+        candidates = live_candidates
+        protected.sort(key=lambda item: os.fsencode(item["path"]))
     return Result(
         "gc",
         {
@@ -403,7 +426,6 @@ def collect(
             "cutoffs": {
                 "scratch": scratch_cutoff.isoformat(),
                 "cache": cache_cutoff.isoformat(),
-                "history": history_cutoff.isoformat(),
             },
             "candidates": candidates,
             "protected": protected,
@@ -434,6 +456,21 @@ def _remove_owned_candidate(config: Config, path: Path, kind: str) -> None:
 
 
 def collect_orphan(config: Config, *, task_arg: str, apply: bool) -> Result:
+    # Read-only validation precedes lock creation; the complete check repeats
+    # under the same stable object lock used by pin, record, and bulk GC.
+    preview = _collect_orphan(config, task_arg=task_arg, apply=False)
+    if not apply:
+        return preview
+    candidate = Path(preview.data["orphan"])
+    with managed_root_lock(config.scratch_root, "scratch", target=candidate):
+        return _collect_orphan(
+            config, task_arg=str(candidate), apply=True, size_bytes=preview.data["bytes"]
+        )
+
+
+def _collect_orphan(
+    config: Config, *, task_arg: str, apply: bool, size_bytes: int | None = None
+) -> Result:
     require_owned_root(config.scratch_root, "scratch")
     candidate = Path(task_arg).expanduser().resolve()
     if (
@@ -449,6 +486,8 @@ def collect_orphan(config: Config, *, task_arg: str, apply: bool) -> Result:
         task, meta = _load_task(config, task_arg)
     elif (candidate / STAGE_META).is_file():
         task = candidate
+        if (candidate / STAGE_META).is_symlink():
+            raise PlanError("invalid_stage_metadata", "orphan stage metadata is a symlink", path=candidate)
         meta = read_json(candidate / STAGE_META)
         if (
             meta.get("schema") != 1
@@ -472,10 +511,14 @@ def collect_orphan(config: Config, *, task_arg: str, apply: bool) -> Result:
             "pinned task must be unpinned before orphan deletion",
             path=task,
         )
+    if meta.get("liveness") == "active" or meta.get("attempt_state") == "active":
+        raise UnsafeError(
+            "active_orphan", "active evidence must be reconciled before orphan deletion", path=task
+        )
     data = {
         "apply": apply,
         "orphan": str(task),
-        "bytes": _tree_size(task),
+        "bytes": _tree_size(task) if size_bytes is None else size_bytes,
         "requires_site_recheck": True,
         "deleted": False,
     }

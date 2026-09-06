@@ -16,12 +16,8 @@ class Config:
     workspace: Path
     scratch_root: Path
     state_root: Path
-    verification: str = "adaptive"
-    observation: str = "adaptive"
     completion_budget_seconds: int = 600
     scratch_ttl_days: int = 14
-    history_ttl_days: int = 90
-    scratch_max_gib: int = 50
     context_max_depth: int = 8
     context_max_entries: int = 10_000
     warm_cache: bool = True
@@ -34,12 +30,8 @@ class Config:
 
 
 _DEFAULTS: dict[str, Any] = {
-    "verification": "adaptive",
-    "observation": "adaptive",
     "completion_budget_seconds": 600,
     "scratch_ttl_days": 14,
-    "history_ttl_days": 90,
-    "scratch_max_gib": 50,
     "context_max_depth": 8,
     "context_max_entries": 10_000,
     "warm_cache": True,
@@ -48,12 +40,8 @@ _DEFAULTS: dict[str, Any] = {
 _ENV_KEYS = {
     "RUNHAND_SCRATCH_ROOT": "scratch_root",
     "RUNHAND_STATE_ROOT": "state_root",
-    "RUNHAND_VERIFICATION": "verification",
-    "RUNHAND_OBSERVATION": "observation",
     "RUNHAND_COMPLETION_BUDGET_SECONDS": "completion_budget_seconds",
     "RUNHAND_SCRATCH_TTL_DAYS": "scratch_ttl_days",
-    "RUNHAND_HISTORY_TTL_DAYS": "history_ttl_days",
-    "RUNHAND_SCRATCH_MAX_GIB": "scratch_max_gib",
     "RUNHAND_CONTEXT_MAX_DEPTH": "context_max_depth",
     "RUNHAND_CONTEXT_MAX_ENTRIES": "context_max_entries",
     "RUNHAND_WARM_CACHE": "warm_cache",
@@ -125,7 +113,7 @@ def _load_toml(path: Path) -> dict[str, Any]:
 
 
 def _flatten(raw: Mapping[str, Any], path: Path) -> dict[str, Any]:
-    allowed_top = {"version", "behavior", "observation", "scratch", "state", "context"}
+    allowed_top = {"version", "observation", "scratch", "state", "context"}
     unknown_top = sorted(set(raw) - allowed_top)
     if unknown_top:
         raise UsageError(
@@ -136,21 +124,16 @@ def _flatten(raw: Mapping[str, Any], path: Path) -> dict[str, Any]:
         )
 
     sections: dict[str, set[str]] = {
-        "behavior": {"verification", "observation"},
         "observation": {"completion_budget_seconds"},
-        "scratch": {"root", "ttl_days", "history_ttl_days", "max_gib"},
+        "scratch": {"root", "ttl_days"},
         "state": {"root"},
         "context": {"max_depth", "max_entries", "warm_cache"},
     }
     flattened: dict[str, Any] = {}
     mapping = {
-        ("behavior", "verification"): "verification",
-        ("behavior", "observation"): "observation",
         ("observation", "completion_budget_seconds"): "completion_budget_seconds",
         ("scratch", "root"): "scratch_root",
         ("scratch", "ttl_days"): "scratch_ttl_days",
-        ("scratch", "history_ttl_days"): "history_ttl_days",
-        ("scratch", "max_gib"): "scratch_max_gib",
         ("state", "root"): "state_root",
         ("context", "max_depth"): "context_max_depth",
         ("context", "max_entries"): "context_max_entries",
@@ -188,14 +171,6 @@ def _parse_bool(value: Any, key: str) -> bool:
 
 
 def _validate(values: dict[str, Any]) -> dict[str, Any]:
-    for key in ("verification", "observation"):
-        if not isinstance(values[key], str) or values[key] not in {
-            "adaptive",
-            "none",
-            "light",
-            "full",
-        }:
-            raise UsageError("invalid_config_value", f"{key} has an unsupported value")
     for key in ("scratch_root", "state_root"):
         if key in values and (
             not isinstance(values[key], str) or not values[key].strip()
@@ -204,8 +179,6 @@ def _validate(values: dict[str, Any]) -> dict[str, Any]:
     positive = (
         "completion_budget_seconds",
         "scratch_ttl_days",
-        "history_ttl_days",
-        "scratch_max_gib",
         "context_max_entries",
     )
     nonnegative = ("context_max_depth",)
@@ -264,8 +237,6 @@ def load_config(
         if config_key in {
             "completion_budget_seconds",
             "scratch_ttl_days",
-            "history_ttl_days",
-            "scratch_max_gib",
             "context_max_depth",
             "context_max_entries",
         }:

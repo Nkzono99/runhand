@@ -17,7 +17,7 @@ from runhand.config import Config, load_config
 from runhand.context import scan_context
 from runhand.copying import CopyPlan, select_entries
 from runhand.doctor import run_doctor
-from runhand.errors import PlanError, UnsafeError
+from runhand.errors import LocalIOError, PlanError, UnsafeError
 from runhand.gc import collect, collect_orphan
 from runhand.scratch import TASK_META, get_scratch
 from runhand.stage import STAGE_META, create_stage, inspect_stage, promote_stage
@@ -92,7 +92,7 @@ class ContextTests(WorkspaceCase):
         self.assertTrue(data["partial"])
         self.assertEqual(data["partial_reasons"][0]["code"], "max_entries")
 
-    def test_cache_hit_refreshes_recent_and_unresolved_history(self) -> None:
+    def test_context_and_doctor_do_not_read_retired_history(self) -> None:
         config = Config(
             workspace=self.workspace,
             scratch_root=self.scratch,
@@ -117,19 +117,14 @@ class ContextTests(WorkspaceCase):
             },
         )
 
-        second = scan_context(config, refresh=False)
+        before = record.read_bytes()
+        with mock.patch.object(Path, "iterdir", side_effect=AssertionError("unexpected directory scan")):
+            second = scan_context(config, refresh=False)
+            doctor = run_doctor(config)
         self.assertEqual(second.data["cache"]["status"], "hit")
-        self.assertEqual(
-            second.data["history"]["recent"][0]["result"], "unknown_unresolved"
-        )
-        self.assertEqual(second.data["history"]["unresolved"], [str(record)])
-        self.assertIn(
-            "unresolved_submission_evidence",
-            {item["code"] for item in second.warnings},
-        )
-
-        doctor = run_doctor(config)
-        self.assertEqual(doctor.data["unresolved_history"], [str(record)])
+        self.assertNotIn("history", second.data)
+        self.assertNotIn("history", doctor.data)
+        self.assertEqual(record.read_bytes(), before)
 
 
 class StageTests(WorkspaceCase):
@@ -188,7 +183,13 @@ class StageTests(WorkspaceCase):
             try:
                 promote_stage(str(stage), str(target), dry_run=False)
                 return "published"
-            except UnsafeError:
+            except UnsafeError as exc:
+                self.assertEqual(exc.code, "target_exists")
+                return "collision"
+            except LocalIOError as exc:
+                # A concurrent use of the same stage can be rejected before
+                # publication while its per-stage mutation lock is held.
+                self.assertEqual(exc.code, "managed_root_busy")
                 return "collision"
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -266,7 +267,7 @@ class StageTests(WorkspaceCase):
 
 
 class ScratchAndGCTests(WorkspaceCase):
-    def test_key_is_a_hint_and_unknown_liveness_is_protected(self) -> None:
+    def test_key_is_only_a_label_and_unknown_liveness_is_protected(self) -> None:
         first = get_scratch(
             self.config,
             kind="analysis",
@@ -285,7 +286,8 @@ class ScratchAndGCTests(WorkspaceCase):
         second_path = Path(second.data["task"])
         self.assertNotEqual(first_path, second_path)
         self.assertEqual(second.data["decision"], "new_unique_task")
-        self.assertEqual(len(second.data["reuse_candidates"]), 1)
+        self.assertNotIn("reuse_candidates", second.data)
+        self.assertEqual(second.warnings, [])
         self.assertNotIn(
             "same-secret-key", (first_path / TASK_META).read_text(encoding="utf-8")
         )
@@ -403,16 +405,16 @@ class ScratchAndGCTests(WorkspaceCase):
             foreign_task,
             foreign_cache,
             foreign_history,
+            owned_history,
             active_history,
         ):
             self.assertTrue(path.exists())
-        self.assertFalse(owned_history.exists())
         protected = {item["path"]: item["reason"] for item in result.data["protected"]}
         self.assertEqual(protected[str(foreign_stage)], "metadata_unknown")
         self.assertEqual(protected[str(foreign_task)], "metadata_unknown")
         self.assertEqual(protected[str(foreign_cache)], "cache_incompatible")
-        self.assertEqual(protected[str(foreign_history)], "history_incompatible")
-        self.assertEqual(protected[str(active_history)], "history_nonterminal")
+        self.assertNotIn(str(foreign_history), protected)
+        self.assertNotIn(str(active_history), protected)
 
     def test_managed_container_symlinks_never_escape_owned_roots(self) -> None:
         source = self.source()
@@ -465,16 +467,14 @@ class ScratchAndGCTests(WorkspaceCase):
         self.assertIn(
             "context_cache_write_failed", {item["code"] for item in context.warnings}
         )
-        self.assertIn(
-            "history_unavailable", {item["code"] for item in context.warnings}
-        )
+        self.assertNotIn("history", context.data)
 
         result = collect(self.config, kind="all", older_than="0s", apply=True)
         protected = {item["path"]: item["reason"] for item in result.data["protected"]}
         self.assertEqual(protected[str(self.scratch / "stages")], "unsafe_container")
         self.assertEqual(protected[str(self.scratch / "tasks")], "unsafe_container")
         self.assertEqual(protected[str(self.state / "cache")], "unsafe_container")
-        self.assertEqual(protected[str(self.state / "history")], "unsafe_container")
+        self.assertNotIn(str(self.state / "history"), protected)
         for path in (
             outside_stages,
             outside_tasks,

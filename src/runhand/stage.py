@@ -1,4 +1,4 @@
-"""Scratch stage creation, inspection, and atomic promotion."""
+"""Mutable scratch stages and atomic publication of formal Runs."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import errno
 import os
 import shutil
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,15 @@ from .config import Config
 from .copying import CopyPlan, Entry, copy_entries, select_entries
 from .errors import LocalIOError, PlanError, UnsafeError
 from .result import Result, warning
-from .storage import atomic_write_json, ensure_owned_subdir, read_json, utc_now
+from .storage import (
+    atomic_write_json,
+    ensure_owned_subdir,
+    is_within,
+    managed_root_lock,
+    read_json,
+    root_is_owned,
+    utc_now,
+)
 
 STAGE_META = "stage.json"
 STAGE_TREE = "tree"
@@ -40,6 +49,15 @@ def _selection(entries: list[Entry]) -> list[Entry]:
 
 
 def create_stage(config: Config, plan: CopyPlan, *, dry_run: bool) -> Result:
+    if is_within(config.scratch_root, plan.source) or is_within(
+        config.scratch_root / "stages", plan.source
+    ):
+        raise UnsafeError(
+            "scratch_overlaps_source",
+            "scratch root and stage container must be outside the copy source",
+            path=config.scratch_root,
+            details={"source": str(plan.source)},
+        )
     entries = select_entries(plan)
     selection = _selection(entries)
     summary = {
@@ -62,30 +80,41 @@ def create_stage(config: Config, plan: CopyPlan, *, dry_run: bool) -> Result:
 
     stages_root = ensure_owned_subdir(config.scratch_root, "scratch", "stages")
     stage = stages_root / _stage_id()
-    temporary = stages_root / f".{stage.name}.tmp-{uuid.uuid4().hex}"
     created = utc_now()
-    try:
-        temporary.mkdir(exist_ok=False)
-        copy_entries(plan, entries, temporary / STAGE_TREE)
-        atomic_write_json(
-            temporary / STAGE_META,
-            {
-                "schema": 1,
-                "owner": "runhand",
-                "kind": "stage",
-                "state": "ready",
-                "created_at": created,
-                "last_used_at": created,
-                "pinned": False,
-                "copy_plan": plan.as_dict(),
-                "selection": [_entry_dict(entry) for entry in selection],
-                "warnings": [],
-            },
-        )
-        _rename_noreplace(temporary, stage)
-    except BaseException:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
+    metadata = {
+        "schema": 1,
+        "owner": "runhand",
+        "kind": "stage",
+        "state": "incomplete",
+        "created_at": created,
+        "last_used_at": created,
+        "pinned": False,
+        "copy_plan": plan.as_dict(),
+        "selection": [_entry_dict(entry) for entry in selection],
+        "warnings": [],
+    }
+    # This private mutable directory needs exclusive allocation, not formal
+    # publication. Share its lock with promotion and exact orphan cleanup.
+    with managed_root_lock(config.scratch_root, "scratch", target=stage):
+        try:
+            stage.mkdir(exist_ok=False)
+        except FileExistsError as exc:
+            raise UnsafeError(
+                "stage_exists", "unique stage path already exists", path=stage
+            ) from exc
+        except OSError as exc:
+            raise LocalIOError(
+                "stage_create_failed", f"cannot allocate stage: {exc}", path=stage
+            ) from exc
+        # Cleanup is limited to the directory this call successfully claimed.
+        try:
+            atomic_write_json(stage / STAGE_META, metadata, create_parents=False)
+            copy_entries(plan, entries, stage / STAGE_TREE)
+            metadata.update(state="ready", last_used_at=utc_now())
+            atomic_write_json(stage / STAGE_META, metadata, create_parents=False)
+        except BaseException:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
     return Result(
         "stage create",
         {
@@ -117,7 +146,8 @@ def _load_stage(stage_arg: str) -> tuple[Path, dict[str, Any]]:
         raise PlanError(
             "invalid_stage_metadata", "stage metadata is incompatible", path=meta_path
         )
-    if tree.is_symlink() or not tree.is_dir():
+    missing_incomplete_tree = meta.get("state") == "incomplete" and not tree.exists()
+    if tree.is_symlink() or (not tree.is_dir() and not missing_incomplete_tree):
         raise PlanError("incomplete_stage", "stage tree is missing", path=tree)
     return stage, meta
 
@@ -125,7 +155,11 @@ def _load_stage(stage_arg: str) -> tuple[Path, dict[str, Any]]:
 def inspect_stage(stage_arg: str) -> Result:
     stage, meta = _load_stage(stage_arg)
     warnings: list[dict[str, Any]] = list(meta.get("warnings", []))
-    if meta.get("state") not in {"ready", "promoted"}:
+    if meta.get("state") == "incomplete":
+        warnings.append(
+            warning("incomplete_stage", "stage copy has not finished", path=str(stage))
+        )
+    elif meta.get("state") not in {"ready", "promoted"}:
         warnings.append(
             warning(
                 "unknown_stage_state", "stage state is not recognized", path=str(stage)
@@ -160,15 +194,32 @@ def _scan_tree_as_plan(tree: Path) -> tuple[CopyPlan, list[Entry]]:
 
 
 def promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
+    stage_path = Path(stage_arg).expanduser().resolve()
+    lock = nullcontext()
+    if not dry_run:
+        for ancestor in stage_path.parents:
+            if root_is_owned(ancestor, "scratch"):
+                lock = managed_root_lock(ancestor, "scratch", target=stage_path)
+                break
+    # Standalone stages have no RunHand-owned scratch ancestor and cannot be
+    # collected by GC. Managed stages must remain alive until publication and
+    # their metadata update both finish, including a second promotion.
+    with lock:
+        return _promote_stage(stage_arg, target_arg, dry_run=dry_run)
+
+
+def _promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
     stage, meta = _load_stage(stage_arg)
+    if meta.get("state") not in {"ready", "promoted"}:
+        raise PlanError(
+            "stage_not_ready",
+            "stage copy must finish before publication",
+            path=stage,
+            details={"state": meta.get("state", "unknown")},
+        )
     tree = stage / STAGE_TREE
-    target_input = Path(target_arg).expanduser()
-    if not target_input.is_absolute():
-        target_input = Path.cwd() / target_input
-    # Resolve only the parent. Resolving the final component would follow a
-    # dangling symlink and make an existing directory entry appear absent.
-    parent = target_input.parent.resolve(strict=False)
-    target = parent / target_input.name
+    target = resolve_target_path(target_arg)
+    parent = target.parent
     if target.exists() or target.is_symlink():
         raise UnsafeError(
             "target_exists",
@@ -218,7 +269,7 @@ def promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
         promotions = list(updated.get("promotions", []))
         promotions.append({"target": str(target), "promoted_at": promoted_at})
         updated["promotions"] = promotions
-        atomic_write_json(stage / STAGE_META, updated)
+        atomic_write_json(stage / STAGE_META, updated, create_parents=False)
     except Exception as exc:
         warnings.append(
             warning(
@@ -239,6 +290,16 @@ def promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
         },
         warnings,
     )
+
+
+def resolve_target_path(target_arg: str) -> Path:
+    """Resolve a publication parent, preserving the leaf and symlink/.. semantics."""
+    target = Path(target_arg).expanduser()
+    if not target.is_absolute():
+        target = Path.cwd() / target
+    # Resolving the leaf would follow an existing (even dangling) symlink.
+    # abspath/normpath would instead erase .. before resolving parent symlinks.
+    return target.parent.resolve(strict=False) / target.name
 
 
 def _rename_noreplace(source: Path, target: Path) -> None:
