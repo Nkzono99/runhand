@@ -22,7 +22,7 @@ codex plugin marketplace add Nkzono99/runhand --ref main
 codex plugin add runhand@runhand
 ```
 
-Then start a new Codex session so the `runhand`, `runhand-submit`, and `runhand-maintenance` skills are loaded. In the Codex CLI, you can also run `/plugins` to inspect or install plugins from registered marketplaces. Plugins are not currently supported by the Codex IDE extension; use the Codex CLI or desktop app.
+Then start a new Codex session so the `research-loop`, `runhand`, `runhand-submit`, and `runhand-maintenance` skills are loaded. In the Codex CLI, you can also run `/plugins` to inspect or install plugins from registered marketplaces. Plugins are not currently supported by the Codex IDE extension; use the Codex CLI or desktop app.
 
 The plugin can invoke the CLI from its bundled source checkout. To also make the `runhand` command available directly in your shell, install the Python package:
 
@@ -125,9 +125,11 @@ The storage check makes tiny temporary probe directories and exits nonzero with 
 
 This repository is itself the `runhand` plugin root. The manifest is [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json). [`runhand`](skills/runhand/SKILL.md) handles safe Run/stage/scratch transitions, [`runhand-submit`](skills/runhand-submit/SKILL.md) handles submission and retry evidence before invoking Site, and [`runhand-maintenance`](skills/runhand-maintenance/SKILL.md) handles doctor and cleanup requests.
 
+[`research-loop`](skills/research-loop/SKILL.md) handles bounded scientific judgments such as whether a model change materially affects a result. It defines the comparison and stopping criteria, limits additional investigations, and reports evidence and validation limits. It uses the existing execution skills as needed and requires no research registry or state file.
+
 The distributed guides explain how to apply installed Simulator/Site skills and pass actual paths and commands to the next operation. Start with the [CLI setup](skills/runhand/references/cli-setup.md), then follow the [working-copy example](skills/runhand/references/create-work.md) for creation or the scratch procedure for a bounded test. The [submission skill](skills/runhand-submit/SKILL.md) covers ordinary retries; a [structured preflight example](skills/runhand-submit/references/retry-preflight.md) is available for integrations.
 
-Simulator-only questions and bounded read-only analysis route to the matching specialist. Identified-job status and cancellation route to Site. Submissions and scheduler-only retries use the submission companion even when no filesystem transition is needed. A retry needs fresh, complete evidence for the relevant Run and sites/clusters, including resolution of any prior unknown submission; an empty queue or an unavailable query does not establish that a retry is safe. The CLI and submission helper never call a scheduler. Routing examples are recorded in [`evals/skill-routing.json`](evals/skill-routing.json).
+Simulator explanations and ordinary bounded read-only analysis route to the matching specialist. Identified-job status and cancellation route to Site. Submissions and scheduler-only retries use the submission companion even when no filesystem transition is needed. A retry needs fresh, complete evidence for the relevant Run and sites/clusters, including resolution of any prior unknown submission; an empty queue or an unavailable query does not establish that a retry is safe. The CLI and submission helper never call a scheduler. Routing examples are recorded in [`evals/skill-routing.json`](evals/skill-routing.json).
 
 The reduced CLI no longer manages submission history or provider request/response contracts. Existing `state/history` files are left untouched, including by `gc --kind all`. Remove retired `[behavior]` settings and `[scratch].max_gib` / `history_ttl_days` from old configuration files. Verification and observation choices belong to the requested workflow; the unused CLI knobs have been removed. The standalone storage/retry wrappers are replaced by their CLI commands above.
 

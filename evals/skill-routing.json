@@ -3,6 +3,40 @@
   "description": "Expected primary routing for RunHand skill activation checks.",
   "cases": [
     {
+      "id": "research-model-comparison",
+      "prompt": "BEACHの光電子returnモデルで定常表面電位が変わるか、既存モデルと比較して検証して。必要な短い試験も実行してよい。",
+      "expected_primary": "research-loop",
+      "expected_handoff": "runhand",
+      "expected_decision_criteria_before_execution": true,
+      "expected_default_diagnostic_branch_limit": 2,
+      "expected_routine_approval_questions": 0
+    },
+    {
+      "id": "research-existing-evidence",
+      "prompt": "この2つの完了済みRunと収束確認の結果だけを使って、VDF変更による表面電位の差が数値誤差より大きいと言えるか判断して。追加計算はしないで。",
+      "expected_primary": "research-loop",
+      "expected_handoff": "output-capability",
+      "expected_runhand_primitive": null,
+      "expected_additional_execution": false
+    },
+    {
+      "id": "research-budget-exhausted",
+      "prompt": "モデル比較の追加診断を2件終えたが、電流収支が合わず結果を信用できない。今回の分岐予算は2件。ここまでの研究結果をまとめて。",
+      "expected_primary": "research-loop",
+      "expected_scientific_decision": "inconclusive",
+      "expected_additional_execution": false,
+      "expected_automatic_budget_extension_request": false
+    },
+    {
+      "id": "research-result-pending",
+      "prompt": "モデル比較の計算はJob 2846659でまだRUNNING、今回の観察時間は使い切った。現時点の到達点をまとめて。",
+      "expected_primary": "research-loop",
+      "expected_work_complete": false,
+      "expected_completed_inconclusive_study": false,
+      "expected_retained_job_ids": ["2846659"],
+      "expected_additional_polling": false
+    },
+    {
       "id": "derive-explicit-run",
       "prompt": "1d0から0d7を作って",
       "expected_primary": "runhand",
