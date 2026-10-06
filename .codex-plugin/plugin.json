@@ -1,7 +1,7 @@
 {
   "name": "runhand",
   "version": "0.3.0",
-  "description": "Safe simulation Run staging, disposable scratch with runtime evidence, submission/retry handoff, and local-state maintenance.",
+  "description": "Simulation case creation, bounded tests, model comparisons, submission/retry, temporary-work cleanup, and situational reorientation.",
   "author": {
     "name": "Jin Nakazono",
     "url": "https://github.com/Nkzono99/runhand"
@@ -17,10 +17,11 @@
     "skills"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "RunHand",
-    "shortDescription": "Stage and publish simulation Runs safely.",
-    "longDescription": "Moves simulation work from an existing Run into a disposable stage and a new no-replace formal Run, or allocates scratch with recorded runtime evidence and coordinated cleanup. Scientific semantics remain with Simulator capabilities and scheduler operations with Site capabilities; a submission companion preserves retry and uncertain-submission checks across that handoff.",
+    "shortDescription": "Create, test, compare, and submit simulations.",
+    "longDescription": "Creates simulation case variants, runs bounded checks in writable scratch, compares models using validated evidence, submits or retries prepared Runs, and cleans disposable work. Situational checks reconnect ongoing work to user intent after corrections or stalled progress. Simulator instructions supply scientific meaning and Site instructions supply execution and scheduler policy.",
     "developerName": "RunHand contributors",
     "category": "Developer Tools",
     "capabilities": [
@@ -31,7 +32,8 @@
     "websiteURL": "https://github.com/Nkzono99/runhand",
     "defaultPrompt": [
       "Create a new simulation run from the nearest precedent.",
-      "Run a bounded smoke test using site-safe scratch.",
+      "Try these simulation settings for 20 steps and check the result.",
+      "Compare these two models and check whether the result changes.",
       "Preview cleanup of old RunHand scratch data."
     ],
     "brandColor": "#356A5A"

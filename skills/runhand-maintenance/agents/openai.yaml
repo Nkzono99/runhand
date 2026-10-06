@@ -1,0 +1,7 @@
+interface:
+  display_name: "RunHand: Storage maintenance"
+  short_description: "Inspect storage and clean disposable RunHand work."
+  default_prompt: "Use $runhand-maintenance to inspect managed storage and preview cleanup of old scratch."
+
+policy:
+  allow_implicit_invocation: true

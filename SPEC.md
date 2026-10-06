@@ -94,6 +94,23 @@ RunHand 1.0 は次を行わない。
 - **Protect sources; promote atomically; validate at the execution boundary.**
 - **Evidence confirms and records; it is not a permission token.**
 - **Unknown remains unknown; observe only when useful.**
+- **Focus effort on consequential work; keep process proportional.**
+
+各 RunHand Skill は共通の [work policy](skills/runhand/references/work-policy.md) を
+task ごとに一回読み、handoff でも再利用する。方針は plugin に同梱し、ローカルの
+`~/.codex/AGENTS.md` に依存しない。適用範囲は RunHand Skill を使う作業であり、
+Site / Simulator が必要とする確認や user の scope は維持する。
+
+根拠のある判断、理由、次の行動を直接示し、依頼内の可逆的な作業をその判断に沿って進める。
+留保は結論や行動を変えるものに絞る。研究では証拠の強さと検証 cost を比べて有力な説明を
+作業仮説として採用し、観測と仮説を区別して検証を集中する。結論を左右する前提や反証は
+該当する主張に添え、具体的な反証や新しい evidence に応じて判断を更新する。
+
+訂正、情報が増えない失敗の反復、予想外の cost、context の復帰では
+[situational-check](skills/situational-check/SKILL.md) で目的と次の行動を結び直す。
+この Skill は coding にも単独で使え、simulation や scratch の操作を必須にしない。
+plugin 同梱の [hooks](docs/hooks.md) は session の開始・復帰と user の発言時に短い context を
+渡す。作業が順調なら直接続行し、許可範囲、未完了 work、budget、観察期限を保持する。
 
 ---
 
@@ -288,6 +305,12 @@ stage や detached job に暗黙利用しない。
 export を加えたものとし、専用 project object や registry を作らない。
 この表は System として支援する intent を表し、すべてを core Skill の trigger にしない。
 
+Skill の description は user の目的を先頭に置き、RunHand、stage、scratch の明示を
+activation の前提にしない。「少し試して」「条件を変えて流して」「比較して検証して」から
+該当する workflow を選ぶ。各 Skill の `agents/openai.yaml` は implicit invocation を許可する。
+通常の library unit test、説明だけの依頼、RunHand 管理外の cleanup は対象を広げず、
+既存の coding / Simulator / filesystem workflow に委譲する。
+
 ## 4.2 What may be inferred
 
 許可済み action の範囲で、次を推定してよい。
@@ -451,6 +474,12 @@ PENDING から RUNNING になるまで polling しない。
 O2 の既定 budget は 10 分である。超過時は still_running_detached として返し、
 completion success と表現しない。user がより長い wait を明示した場合は、その bounded
 request を優先するが、background daemon は作らない。
+
+O2 の長い test / analysis は、予想所要時間と次回確認時刻を決め、確認の間は同じ依頼の
+独立した作業を進める。通常の確認は完了見込み付近または有意な中間点に置き、見込み不明なら
+約 1 分から始め、変化が乏しければ 2 分、5 分程度へ間隔を延ばす。短い wait / status query を
+連続して watch しない。待機中の別作業や skill handoff は observation budget を更新しない。
+具体的な手順は [observation guide](skills/runhand/references/observe-work.md) に従う。
 
 ---
 

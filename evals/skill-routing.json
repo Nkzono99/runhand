@@ -3,12 +3,107 @@
   "description": "Expected primary routing for RunHand skill activation checks.",
   "cases": [
     {
+      "id": "user-corrects-the-method",
+      "prompt": "画像を表示できるようにしてほしいのに全面改修に進んでいる。目的に戻って、必要な修正だけ進めて。",
+      "expected_primary": "situational-check",
+      "expected_handoff": "coding-workflow",
+      "expected_runhand_primitive": null,
+      "expected_routine_approval_questions": 0
+    },
+    {
+      "id": "repeated-failure-without-evidence",
+      "prompt": "条件を変えず同じテストを3回実行して全部同じエラーだった。同じことを繰り返さないで、進め方を見直して。",
+      "expected_primary": "situational-check",
+      "expected_handoff": "coding-workflow",
+      "expected_new_evidence_before_retry": true,
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "context-resumption-with-pending-work",
+      "prompt": "文脈を戻して比較作業を続けて。Job 92345は実行中で、観察は14:20まで。現時刻は14:22で、キャンセルは頼んでいない。",
+      "expected_primary": "situational-check",
+      "expected_observation_budget_reset": false,
+      "expected_scheduler_cancellation": false,
+      "expected_report": "unfinished",
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "supported-working-hypothesis",
+      "prompt": "収束確認は通過していて、旧モデルと新モデルの表面電位には約30%の差、数値誤差の見積もりは約2%だった。反射モデルが差の主因という仮説を採用し、必要な短い比較を進めて。",
+      "expected_primary": "research-loop",
+      "expected_handoff": "runhand",
+      "expected_adopted_working_hypothesis": true,
+      "expected_distinction_between_observation_and_hypothesis": true,
+      "expected_routine_approval_questions": 0
+    },
+    {
+      "id": "concrete-counterevidence",
+      "prompt": "反射モデルが電位差の主因と考えていたが、新モデルの計算ログにNaNがあった。この証拠を踏まえて比較結果を判断して。追加計算は不要。",
+      "expected_primary": "research-loop",
+      "expected_scientific_decision": "inconclusive",
+      "expected_hypothesis_revision": true,
+      "expected_additional_execution": false
+    },
+    {
+      "id": "implicit-short-simulation-test",
+      "prompt": "このBEACHの設定が動くか少し試して。元のRunは変更しないで。",
+      "expected_primary": "runhand",
+      "expected_runhand_primitive": "scratch-prepare",
+      "expected_routine_approval_questions": 0
+    },
+    {
+      "id": "implicit-case-change-and-execution",
+      "prompt": "前の条件から密度を0.7倍にしたケースを追加して計算も流して。",
+      "expected_primary": "runhand",
+      "expected_handoff": "runhand-submit",
+      "expected_runhand_primitive": "stage-and-promote"
+    },
+    {
+      "id": "implicit-model-effect-validation",
+      "prompt": "新しい反射モデルに替えると定常電位はどれくらい変わる？以前のモデルと実際に比べて確かめて。",
+      "expected_primary": "research-loop",
+      "expected_handoff": "runhand",
+      "expected_decision_criteria_before_execution": true
+    },
+    {
+      "id": "implicit-restart-prepared-run",
+      "prompt": "昨日の計算を同じ条件のままチェックポイントから再開して。",
+      "expected_primary": "runhand-submit",
+      "expected_runhand_primitive": null,
+      "expected_submission_without_reconciliation": false
+    },
+    {
+      "id": "implicit-managed-scratch-cleanup",
+      "prompt": "前に用意した試験用scratchの古いものを整理して。正式なRunは残して。",
+      "expected_primary": "runhand-maintenance",
+      "expected_runhand_primitive": "gc"
+    },
+    {
+      "id": "ordinary-library-unit-tests",
+      "prompt": "このPythonライブラリの単体テストを実行して、失敗の原因を直して。シミュレーションのRunは扱わない。",
+      "expected_primary": "coding-workflow",
+      "expected_runhand_primitive": null
+    },
+    {
+      "id": "model-explanation-without-validation",
+      "prompt": "モデルAとモデルBの違いを説明して。計算や検証は不要。",
+      "expected_primary": "simulator-capability",
+      "expected_runhand_primitive": null,
+      "expected_additional_execution": false
+    },
+    {
+      "id": "unmanaged-project-temp-cleanup",
+      "prompt": "RunHandとは無関係な、このプロジェクトのtmpフォルダを整理して。",
+      "expected_primary": "filesystem-workflow",
+      "expected_runhand_primitive": null
+    },
+    {
       "id": "research-model-comparison",
       "prompt": "BEACHの光電子returnモデルで定常表面電位が変わるか、既存モデルと比較して検証して。必要な短い試験も実行してよい。",
       "expected_primary": "research-loop",
       "expected_handoff": "runhand",
       "expected_decision_criteria_before_execution": true,
-      "expected_default_diagnostic_branch_limit": 2,
+      "expected_budget_before_execution": true,
       "expected_routine_approval_questions": 0
     },
     {

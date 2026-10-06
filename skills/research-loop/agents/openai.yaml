@@ -1,0 +1,7 @@
+interface:
+  display_name: "RunHand: Research comparison"
+  short_description: "Compare simulation changes using validated evidence."
+  default_prompt: "Use $research-loop to compare these simulation models and decide whether the change matters."
+
+policy:
+  allow_implicit_invocation: true

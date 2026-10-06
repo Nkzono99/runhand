@@ -1,0 +1,7 @@
+interface:
+  display_name: "RunHand: Submit and retry"
+  short_description: "Submit simulations and reconcile retries or lost responses."
+  default_prompt: "Use $runhand-submit to submit this prepared Run or reconcile the requested retry."
+
+policy:
+  allow_implicit_invocation: true

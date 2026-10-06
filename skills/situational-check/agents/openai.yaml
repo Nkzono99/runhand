@@ -1,0 +1,7 @@
+interface:
+  display_name: "RunHand: Situational check"
+  short_description: "Reconnect the next action to user intent and context."
+  default_prompt: "Use $situational-check to reconsider the next action in light of the latest feedback and constraints."
+
+policy:
+  allow_implicit_invocation: true

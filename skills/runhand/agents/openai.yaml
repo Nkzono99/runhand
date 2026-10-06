@@ -1,0 +1,7 @@
+interface:
+  display_name: "RunHand: Prepare and test"
+  short_description: "Create simulation cases and run bounded scratch checks."
+  default_prompt: "Use $runhand to create a parameter variant from this simulation and run a short check."
+
+policy:
+  allow_implicit_invocation: true
