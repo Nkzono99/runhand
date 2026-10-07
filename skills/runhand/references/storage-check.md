@@ -32,6 +32,8 @@ This copies into a unique `.runhand-run-*/tree` under that parent. Only after th
 
 The JSON receipt and stage promotion history include `publish_mode` and `backing_path`. The sibling is **durable Run data**, not scratch: it must be outside managed scratch and stages, and RunHand GC does not collect it. Run inputs, executables, outputs, and restart files remain usable after the original source, stage, plugin, or state cache is removed. The formal link and its backing directory must both be retained for as long as the Run is needed. Moving or archiving the destination parent with all its hidden children preserves the relative link; copying only the formal link does not preserve the Run. Backup tools must include the hidden backing directory or deliberately dereference the formal link. Site scripts that forbid symlink working directories require atomic mode on compatible storage.
 
+Tools that resolve the working directory see `backing_path`; references through `..` then use its physical parent. Keep execution dependencies inside the selected tree or supply explicit absolute paths, and check scripts that depend on the formal directory's parent before choosing this mode.
+
 ## Failure and recovery
 
 Each durable sibling has a `publication.json` outside its Run tree with the target, stage, backing path, and state:
