@@ -523,9 +523,26 @@ promotion は target parent 上の temporary sibling に complete tree を構築
 symlink のいずれとして存在しても上書きせず、原子的な no-replace 操作で公開する。
 validation evidence は promotion の必須条件にしない。
 
-formal target の filesystem は Linux `renameat2(RENAME_NOREPLACE)` に対応している必要がある。
-書き込み可能性や dry-run ではこの対応を検証できない。非対応時は配置を失敗として返し、通常の rename や copy にフォールバックしない。
-内部 stage の準備はこの操作を必要としない。
+既定の `--publish-mode atomic` は Linux `renameat2(RENAME_NOREPLACE)` を使う。
+promotion は実際の target parent をコピー前に probe し、非対応なら `publication_unavailable` と
+元の errno を返す。書き込み可能性や dry-run ではこの対応を検証できない。
+通常の rename や copy、別の公開方式に自動フォールバックしない。内部 stage の準備はこの操作を必要としない。
+
+明示的な `--publish-mode symlink` は、target parent の unique な durable sibling に complete tree を
+構築し、exclusive な relative directory symlink の作成で正式名を公開する。`renameat2` を必要とせず、
+既存の file、directory、dangling を含む symlink を置き換えない。Site と consumer が directory link を
+許容する場合に使う。sibling は stage や managed scratch の外に置き、GC 対象としない。
+成功結果と stage history は mode と backing path を返す。source / stage / state を削除しても利用可能だが、
+保存・移動・archive は正式 link と hidden backing directory の両方を保持する必要がある。
+
+symlink mode の sibling は Run tree の外の recovery record に target、stage、backing path と
+incomplete / ready / published を記録する。正式名は complete tree のみを参照する。
+失敗時は自身の未公開 copy だけを削除し、cleanup 失敗や公開済みの可能性があれば backing と record の
+実際の path を error details に保持する。kill 後は record が欠ける場合もある。
+link 作成後の中断では ready record が残りうるため、復旧は実際の link を確認して公開済み Run を保護する。
+target がない場合は元の ready stage から未使用名へ再試行できる。残った sibling の一括削除は行わない。
+公開後の record / stage state 更新失敗は warning とし、target を削除しない。
+いずれの mode も namespace の no-replace 公開を保証し、filesystem の保証を超える電源断耐性を追加しない。
 
 通常の一時実行には `scratch prepare` を使う。新しい unique task を確保し、その `work/` へ選択済み
 入力を一度だけコピーする。stage / promote を呼ばず、formal Run の原子的公開を行わないため、
@@ -661,7 +678,7 @@ core synopsis:
     runhand stage create --source PATH --plan FILE|- [--dry-run] [--json]
     runhand stage create --source PATH --include PATTERN [--include PATTERN ...] [--exclude PATTERN ...] [--symlink-policy internal-relative|reject] [--dry-run] [--json | --print-path stage|tree]
     runhand stage inspect STAGE [--json]
-    runhand promote STAGE TARGET [--dry-run] [--json]
+    runhand promote STAGE TARGET [--publish-mode atomic|symlink] [--dry-run] [--json | --print-path target]
     runhand scratch get --kind smoke|pilot|debug|analysis|preview [--key TEXT] [--pin] [--dry-run] [--json | --print-path task]
     runhand scratch prepare --kind KIND [--key TEXT] --source PATH (--plan FILE|- | --include PATTERN ...) [selection options] [--pin] [--dry-run] [--json | --print-path task|workdir]
     runhand scratch pin TASK [--dry-run] [--json]
@@ -671,7 +688,7 @@ core synopsis:
     runhand gc [--kind scratch|cache|all] [--older-than DURATION] [--apply] [--json]
     runhand gc --orphan TASK [--apply] [--json]
     runhand doctor [--json]
-    runhand storage check PARENT [PARENT ...] [--json]
+    runhand storage check PARENT [PARENT ...] [--publish-mode atomic|symlink] [--json]
     runhand retry check --evidence FILE|- [--require-allowed] [--json]
 
 `stage create` と `scratch prepare` は同じ selection 引数と parser を使う。`--plan` と inline selection

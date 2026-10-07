@@ -31,7 +31,8 @@ class StorageProbeTests(unittest.TestCase):
         self.assertEqual(result.command, "storage check")
         self.assertEqual(result.data, {
             "supported": True,
-            "checks": [{"parent": str(self.parent), "supported": True}],
+            "publish_mode": "atomic",
+            "checks": [{"parent": str(self.parent), "supported": True, "publish_mode": "atomic"}],
         })
         self.assertEqual(list(self.parent.iterdir()), [existing])
         self.assertEqual(existing.stat().st_ino, inode)
@@ -46,7 +47,7 @@ class StorageProbeTests(unittest.TestCase):
 
         rename = mock.Mock(side_effect=replacing_rename)
         with mock.patch(
-            "runhand.probes.ctypes.CDLL", return_value=SimpleNamespace(renameat2=rename)
+            "runhand.publication.ctypes.CDLL", return_value=SimpleNamespace(renameat2=rename)
         ):
             result = probe_storage(str(self.parent))
         self.assertFalse(result["supported"])
@@ -78,6 +79,31 @@ class StorageProbeTests(unittest.TestCase):
         self.assertEqual([check["supported"] for check in checks], [False, True, False])
         self.assertEqual(checks[0]["error"]["errno"], errno.ENOENT)
         self.assertEqual(checks[2]["error"]["errno"], errno.ENOENT)
+        self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_symlink_probe_does_not_require_rename_and_cleans_up(self) -> None:
+        with mock.patch("runhand.probes.rename_noreplace", side_effect=AssertionError("rename unavailable")):
+            result = check_storage([str(self.parent)], publish_mode="symlink")
+        self.assertTrue(result.data["supported"])
+        self.assertEqual(result.data["publish_mode"], "symlink")
+        self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_einval_and_missing_runtime_are_reported_without_fallback(self) -> None:
+        for error in (errno.EINVAL, errno.ENOSYS, errno.EACCES, errno.ENOSPC):
+            with self.subTest(errno=error), mock.patch(
+                "runhand.probes.rename_noreplace", side_effect=OSError(error, os.strerror(error))
+            ), mock.patch("runhand.probes.symlink_noreplace") as fallback:
+                result = probe_storage(str(self.parent))
+                self.assertFalse(result["supported"])
+                self.assertEqual(result["error"]["errno"], error)
+                fallback.assert_not_called()
+                self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_symlink_probe_failure_preserves_errno(self) -> None:
+        with mock.patch("runhand.probes.symlink_noreplace", side_effect=OSError(errno.EPERM, "links denied")):
+            result = probe_storage(str(self.parent), publish_mode="symlink")
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["error"]["errno"], errno.EPERM)
         self.assertEqual(list(self.parent.iterdir()), [])
 
 if __name__ == "__main__":

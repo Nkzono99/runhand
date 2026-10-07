@@ -38,7 +38,9 @@ Use `--json` for selection/summary details or `--dry-run --json` for a useful pr
 RH_WORKDIR=$("${RH[@]}" promote "$RH_STAGE" "$RH_DESTINATION" --print-path target)
 ```
 
-Promotion never replaces an existing destination. Return the target, changes, and performed checks for creation alone. For requested execution, pass the path, command, resources, observation request, and current evidence to [runhand-submit](../../runhand-submit/SKILL.md) or the Site's synchronous launcher.
+Promotion checks destination support before copying and never replaces an existing destination. The default uses atomic directory rename. For shared storage without `RENAME_NOREPLACE`, [storage check](storage-check.md) describes explicit `--publish-mode symlink`, its durable backing tree, and recovery rules. Pass the same mode to `storage check` and `promote`; dry-run reports the mode without probing storage.
+
+Return the target, changes, publication mode, any backing path, and performed checks for creation alone. For requested execution, pass the path, command, resources, observation request, and current evidence to [runhand-submit](../../runhand-submit/SKILL.md) or the Site's synchronous launcher.
 
 ## Handle a failed step
 
@@ -48,7 +50,10 @@ Promotion never replaces an existing destination. Return the target, changes, an
 | `source_changed` | Establish stable inputs or a suitable restart snapshot. |
 | `target_exists` | Reuse only if it already satisfies the request; otherwise resolve the destination. |
 | `managed_root_busy` | Inspect after the current operation finishes before retrying. |
-| `atomic_noreplace_unavailable` / `atomic_publish_failed` | Use [storage check](storage-check.md) for the formal destination. |
+| `publication_unavailable` / `atomic_noreplace_unavailable` / `atomic_publish_failed` / `symlink_publish_failed` | Use [storage check](storage-check.md) for the selected mode at the formal destination. |
+| `publication_in_scratch` | Choose durable storage outside stages and managed scratch for symlink publication. |
+| `retained_backing` in error details, or an interrupted publication | Follow [publication recovery](storage-check.md#failure-and-recovery); inspect the formal link before retrying. |
+| Published target with `publication_state_update_failed` | Keep the target and backing; the recovery record could not be updated. |
 | Published target with `stage_state_update_failed` | Keep the target and report the warning; publication already succeeded. |
 
 Report what remains after failure. Retain an already published Run after a later validation/submission failure.
