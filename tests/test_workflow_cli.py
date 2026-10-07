@@ -55,6 +55,22 @@ class WorkflowCLITests(unittest.TestCase):
         self.assertEqual((code, out), (3, ''))
         self.assertIn('target_exists', err)
 
+    def test_symlink_publication_cli_and_selected_storage_probe(self):
+        code, out, err = self.invoke('storage', 'check', str(self.workspace), '--publish-mode', 'symlink')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)['data']['publish_mode'], 'symlink')
+        code, out, err = self.invoke('stage', 'create', *self.selection, '--print-path', 'stage', json_mode=False)
+        self.assertEqual(code, 0, err)
+        stage = out.rstrip('\n')
+        target = self.workspace / 'linked case'
+        code, out, err = self.invoke('promote', stage, str(target), '--publish-mode', 'symlink', '--print-path', 'target', json_mode=False)
+        self.assertEqual((code, out, err), (0, str(target) + '\n', ''))
+        self.assertTrue(target.is_symlink())
+        self.assertEqual((target / 'input.toml').read_text(), 'steps = 1000\n')
+        code, out, err = self.invoke('promote', stage, str(target), '--publish-mode', 'symlink', '--print-path', 'target', json_mode=False)
+        self.assertEqual((code, out), (3, ''))
+        self.assertIn('target_exists', err)
+
     def test_flag_selection_defaults_to_partial_and_preserves_quoted_patterns(self):
         code, out, _ = self.invoke('stage', 'create', '--source', str(self.source), '--include', '*.toml', '--dry-run')
         self.assertEqual(code, 0)

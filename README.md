@@ -37,6 +37,8 @@ The skills share a [work policy](skills/runhand/references/work-policy.md) for e
 
 Detailed procedures: [create a Run](skills/runhand/references/create-work.md), [complete scratch work](skills/runhand/references/scratch-work.md), and [diagnose publication storage](skills/runhand/references/storage-check.md). CLI commands, configuration, and contracts are documented in [SPEC.md](SPEC.md).
 
+Publication defaults to atomic directory rename and checks destination support before copying. On shared filesystems that reject `RENAME_NOREPLACE`, including some Lustre mounts, `promote --publish-mode symlink` publishes a relative link to an independent durable sibling tree. It refuses all existing targets and survives stage cleanup. Keep the link and its hidden backing directory together; see the [storage and recovery guide](skills/runhand/references/storage-check.md) before using this mode.
+
 ## CLI and development
 
 The plugin can use the CLI from its bundled checkout. For direct shell use:

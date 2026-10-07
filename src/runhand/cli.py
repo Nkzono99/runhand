@@ -21,6 +21,7 @@ from .gc import collect, collect_orphan
 from .result import Result
 from .output import emit_success_path, validate_printable_path
 from .probes import check_storage
+from .publication import PUBLISH_MODES
 from .scratch import get_scratch, load_scratch_evidence, prepare_scratch, record_evidence, set_pin
 from .security import redact_sensitive
 from .stage import create_stage, inspect_stage, promote_stage, resolve_target_path
@@ -120,6 +121,10 @@ def build_parser() -> Parser:
     )
     promote.add_argument("stage", metavar="STAGE")
     promote.add_argument("target", metavar="TARGET")
+    promote.add_argument(
+        "--publish-mode", choices=PUBLISH_MODES, default="atomic",
+        help="atomic directory rename (default), or a relative symlink to a durable sibling copy",
+    )
     _leaf_options(promote, dry_run=True, paths=("target",))
 
     scratch = commands.add_parser("scratch", help="manage unique disposable tasks")
@@ -189,6 +194,7 @@ def build_parser() -> Parser:
     storage_commands = storage.add_subparsers(dest="storage_command", required=True, parser_class=Parser)
     storage_check = storage_commands.add_parser("check", help="probe atomic no-replace publication using tiny temporary directories")
     storage_check.add_argument("parents", nargs="+", metavar="PARENT")
+    storage_check.add_argument("--publish-mode", choices=PUBLISH_MODES, default="atomic")
     _leaf_options(storage_check)
 
     retry = commands.add_parser("retry", help="check supplied submission evidence without contacting a scheduler")
@@ -212,7 +218,7 @@ def _config(namespace: argparse.Namespace) -> Config:
 
 def dispatch(namespace: argparse.Namespace) -> Result:
     if namespace.command == "storage":
-        return check_storage(namespace.parents)
+        return check_storage(namespace.parents, publish_mode=namespace.publish_mode)
     if namespace.command == "retry":
         try:
             if namespace.evidence == "-":
@@ -243,7 +249,8 @@ def dispatch(namespace: argparse.Namespace) -> Result:
         return inspect_stage(namespace.stage)
     if namespace.command == "promote":
         return promote_stage(
-            namespace.stage, namespace.target, dry_run=namespace.dry_run
+            namespace.stage, namespace.target, dry_run=namespace.dry_run,
+            publish_mode=namespace.publish_mode,
         )
     if namespace.command == "scratch":
         if namespace.scratch_command == "prepare":

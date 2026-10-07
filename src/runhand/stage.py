@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import ctypes
 import errno
 import os
 import shutil
+import tempfile
 import uuid
 from contextlib import nullcontext
 from pathlib import Path
@@ -13,7 +13,9 @@ from typing import Any
 
 from .config import Config
 from .copying import CopyPlan, Entry, copy_entries, select_entries
-from .errors import LocalIOError, PlanError, UnsafeError
+from .errors import LocalIOError, PlanError, RunHandError, UnsafeError
+from .probes import probe_storage
+from .publication import PUBLISH_MODES, rename_noreplace, symlink_noreplace
 from .result import Result, warning
 from .storage import (
     atomic_write_json,
@@ -27,6 +29,7 @@ from .storage import (
 
 STAGE_META = "stage.json"
 STAGE_TREE = "tree"
+PUBLICATION_META = "publication.json"
 
 
 def _stage_id() -> str:
@@ -193,7 +196,11 @@ def _scan_tree_as_plan(tree: Path) -> tuple[CopyPlan, list[Entry]]:
     return plan, select_entries(plan)
 
 
-def promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
+def promote_stage(
+    stage_arg: str, target_arg: str, *, dry_run: bool, publish_mode: str = "atomic"
+) -> Result:
+    if publish_mode not in PUBLISH_MODES:
+        raise PlanError("invalid_publish_mode", "unknown publication mode")
     stage_path = Path(stage_arg).expanduser().resolve()
     lock = nullcontext()
     if not dry_run:
@@ -205,10 +212,12 @@ def promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
     # collected by GC. Managed stages must remain alive until publication and
     # their metadata update both finish, including a second promotion.
     with lock:
-        return _promote_stage(stage_arg, target_arg, dry_run=dry_run)
+        return _promote_stage(stage_arg, target_arg, dry_run=dry_run, publish_mode=publish_mode)
 
 
-def _promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
+def _promote_stage(
+    stage_arg: str, target_arg: str, *, dry_run: bool, publish_mode: str
+) -> Result:
     stage, meta = _load_stage(stage_arg)
     if meta.get("state") not in {"ready", "promoted"}:
         raise PlanError(
@@ -232,6 +241,26 @@ def _promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
             "formal target parent must already exist",
             path=parent,
         )
+    if publish_mode == "symlink" and (
+        is_within(parent, stage)
+        or any(root_is_owned(ancestor, "scratch") for ancestor in (parent, *parent.parents))
+    ):
+        raise UnsafeError(
+            "publication_in_scratch",
+            "durable symlink publication must be outside stages and managed scratch",
+            path=target,
+        )
+    if not dry_run:
+        # Diagnose the actual destination before scanning/copying a large tree.
+        # The final primitive still refuses collisions; this probe is not a lock.
+        check = probe_storage(str(parent), publish_mode=publish_mode)
+        if not check["supported"]:
+            raise LocalIOError(
+                "publication_unavailable",
+                f"{publish_mode} no-replace publication is unavailable on the destination filesystem",
+                path=parent,
+                details={"check": check},
+            )
     plan, entries = _scan_tree_as_plan(tree)
     selection = _selection(entries)
     summary = {
@@ -248,26 +277,35 @@ def _promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
                 "stage": str(stage),
                 "target": str(target),
                 "temporary_parent": str(parent),
+                "publish_mode": publish_mode,
                 "summary": summary,
             },
         )
 
-    temporary = parent / f".runhand-promote-{target.name}-{uuid.uuid4().hex}"
-    try:
-        copy_entries(plan, entries, temporary)
-        _rename_noreplace(temporary, target)
-    except BaseException:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
-
     warnings: list[dict[str, Any]] = []
+    backing: Path | None = None
+    if publish_mode == "symlink":
+        backing, publication_warnings = _publish_symlink(plan, entries, stage, target)
+        warnings.extend(publication_warnings)
+    else:
+        temporary = parent / f".runhand-promote-{target.name}-{uuid.uuid4().hex}"
+        try:
+            copy_entries(plan, entries, temporary)
+            _rename_noreplace(temporary, target)
+        except BaseException:
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise
+
     promoted_at = utc_now()
     try:
         updated = dict(meta)
         updated["state"] = "promoted"
         updated["last_used_at"] = promoted_at
         promotions = list(updated.get("promotions", []))
-        promotions.append({"target": str(target), "promoted_at": promoted_at})
+        promotion = {"target": str(target), "promoted_at": promoted_at, "publish_mode": publish_mode}
+        if backing is not None:
+            promotion["backing_path"] = str(backing)
+        promotions.append(promotion)
         updated["promotions"] = promotions
         atomic_write_json(stage / STAGE_META, updated, create_parents=False)
     except Exception as exc:
@@ -286,10 +324,96 @@ def _promote_stage(stage_arg: str, target_arg: str, *, dry_run: bool) -> Result:
             "stage": str(stage),
             "target": str(target),
             "published": True,
+            "publish_mode": publish_mode,
+            **({"backing_path": str(backing)} if backing is not None else {}),
             "summary": summary,
         },
         warnings,
     )
+
+
+def _cleanup_unpublished_backing(container: Path, backing: Path, target: Path) -> bool:
+    """Remove only our unreachable copy, preserving it after an uncertain publish.
+
+    A signal can arrive after symlink() succeeds but before Python returns.
+    Never remove a backing tree referenced by the formal name, or when the
+    current link cannot be read reliably. Interrupted copies retain their
+    publication record if cleanup itself fails.
+    """
+    try:
+        if os.readlink(target) == os.path.relpath(backing, target.parent):
+            return False
+    except OSError as exc:
+        if exc.errno not in {errno.ENOENT, errno.EINVAL}:
+            return False
+    try:
+        shutil.rmtree(container)
+    except OSError:
+        return False
+    return True
+
+
+def _publish_symlink(
+    plan: CopyPlan, entries: list[Entry], stage: Path, target: Path
+) -> tuple[Path, list[dict[str, Any]]]:
+    try:
+        container = Path(tempfile.mkdtemp(prefix=".runhand-run-", dir=target.parent))
+    except OSError as exc:
+        raise LocalIOError(
+            "publication_create_failed", f"cannot allocate durable Run copy: {exc}", path=target.parent
+        ) from exc
+    backing = container / "tree"
+    record = container / PUBLICATION_META
+    metadata = {
+        "schema": 1, "owner": "runhand", "kind": "publication",
+        "publish_mode": "symlink", "state": "incomplete",
+        "stage": str(stage), "target": str(target), "backing_path": str(backing),
+        "created_at": utc_now(),
+    }
+    try:
+        atomic_write_json(record, metadata, create_parents=False)
+        copy_entries(plan, entries, backing)
+        # Construction is private. Once complete, preserve the Run tree's
+        # group/other access through its extra parent while retaining owner
+        # access for recovery-record updates.
+        os.chmod(container, 0o700 | (backing.stat().st_mode & 0o077))
+        metadata["state"] = "ready"
+        atomic_write_json(record, metadata, create_parents=False)
+        try:
+            symlink_noreplace(backing, target)
+        except FileExistsError as exc:
+            raise UnsafeError("target_exists", "target appeared during symlink publication", path=target) from exc
+        except OSError as exc:
+            raise LocalIOError(
+                "symlink_publish_failed", f"no-replace symlink publication failed: {exc}",
+                path=target, details={"errno": exc.errno},
+            ) from exc
+    except BaseException as exc:
+        cleaned = _cleanup_unpublished_backing(container, backing, target)
+        if isinstance(exc, KeyboardInterrupt):
+            exc = RunHandError("interrupted", "publication interrupted", 1, retryable=True)
+        elif isinstance(exc, OSError):
+            exc = LocalIOError(
+                "publication_prepare_failed", f"cannot prepare durable Run copy: {exc}",
+                path=backing, details={"errno": exc.errno},
+            )
+        if isinstance(exc, RunHandError):
+            if not cleaned:
+                exc.details.update(retained_backing=str(backing), publication_record=str(record), target=str(target))
+            raise exc
+        raise
+
+    warnings = []
+    try:
+        metadata.update(state="published", published_at=utc_now())
+        atomic_write_json(record, metadata, create_parents=False)
+    except Exception as exc:
+        warnings.append(warning(
+            "publication_state_update_failed",
+            "publication succeeded, but its recovery record could not be updated",
+            path=str(record), details={"reason": str(exc)},
+        ))
+    return backing, warnings
 
 
 def resolve_target_path(target_arg: str) -> Path:
@@ -304,33 +428,15 @@ def resolve_target_path(target_arg: str) -> Path:
 
 def _rename_noreplace(source: Path, target: Path) -> None:
     """Atomically rename on Linux without replacing any existing path."""
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
+    try:
+        rename_noreplace(source, target)
+    except OSError as exc:
+        if exc.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise UnsafeError(
+                "target_exists", "target appeared during atomic promotion", path=target
+            ) from exc
         raise LocalIOError(
-            "atomic_noreplace_unavailable",
-            "this Linux runtime does not expose renameat2(RENAME_NOREPLACE)",
-            path=target,
-        )
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
-    result = renameat2(-100, os.fsencode(source), -100, os.fsencode(target), 1)
-    if result == 0:
-        return
-    error = ctypes.get_errno()
-    if error in {errno.EEXIST, errno.ENOTEMPTY}:
-        raise UnsafeError(
-            "target_exists", "target appeared during atomic promotion", path=target
-        )
-    raise LocalIOError(
-        "atomic_publish_failed",
-        f"atomic no-replace publish failed: {os.strerror(error)}",
-        path=target,
-        retryable=error in {errno.EINTR, errno.EBUSY},
-    )
+            "atomic_noreplace_unavailable" if exc.errno == errno.ENOSYS else "atomic_publish_failed",
+            f"atomic no-replace publish failed: {exc}", path=target,
+            retryable=exc.errno in {errno.EINTR, errno.EBUSY}, details={"errno": exc.errno},
+        ) from exc
